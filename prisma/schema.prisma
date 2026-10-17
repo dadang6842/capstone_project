@@ -1,0 +1,220 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "mysql"
+}
+
+// ---------------------------------------------------------------------
+// 1. 회원 / 인증
+// ---------------------------------------------------------------------
+
+enum UserRole {
+  USER
+  ADMIN
+}
+
+model User {
+  userId    BigInt    @id @default(autoincrement()) @map("user_id") @db.UnsignedBigInt
+  email     String    @unique(map: "uk_users_email") @db.VarChar(100)
+  password  String    @db.VarChar(255) /// bcrypt 해시
+  nickname  String    @db.VarChar(8) /// 1~8자 (앞뒤 공백 제거, 공백만 있는 값 불가)
+  role      UserRole  @default(USER) /// ADMIN이면 관리자 웹(/api/v1/admin/*) 사용 가능
+  createdAt DateTime  @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.DateTime(3)
+  deletedAt DateTime? @map("deleted_at") @db.DateTime(3) /// 탈퇴 요청 일시 (7일 유예 후 영구 삭제)
+
+  refreshTokens RefreshToken[]
+  conversations Conversation[]
+  documents     Document[]
+
+  @@index([createdAt], map: "idx_users_created") // 관리자 지표: 기간별 가입자 수
+  @@map("users")
+}
+
+/// 로그인/재발급 때마다 1행. created_at은 관리자 지표의 활성 사용자 집계에도 사용
+model RefreshToken {
+  refreshTokenId BigInt    @id @default(autoincrement()) @map("refresh_token_id") @db.UnsignedBigInt
+  userId         BigInt    @map("user_id") @db.UnsignedBigInt
+  token          String    @unique(map: "uk_refresh_tokens_token") @db.VarChar(512)
+  expiresAt      DateTime  @map("expires_at") @db.DateTime(3)
+  revokedAt      DateTime? @map("revoked_at") @db.DateTime(3)
+  createdAt      DateTime  @default(now()) @map("created_at") @db.DateTime(3)
+
+  user User @relation(fields: [userId], references: [userId], onDelete: Cascade, map: "fk_refresh_tokens_user")
+
+  @@index([userId], map: "idx_refresh_tokens_user")
+  @@index([createdAt, userId], map: "idx_refresh_tokens_created") // 관리자 지표: 기간별 활성 사용자
+  @@map("refresh_tokens")
+}
+
+// ---------------------------------------------------------------------
+// 2. 대화 (사용자가 올린 AI 대화 내보내기 파일 1개 = 대화 1개)
+//    백엔드는 파일을 해석하지 않고 S3에 보관. 원본 열람은 Presigned URL로 파일 자체를 보여 줌
+// ---------------------------------------------------------------------
+
+model Conversation {
+  conversationId BigInt    @id @default(autoincrement()) @map("conversation_id") @db.UnsignedBigInt
+  userId         BigInt    @map("user_id") @db.UnsignedBigInt
+  filename       String    @db.VarChar(255) /// 원본 파일명
+  contentType    String?   @map("content_type") @db.VarChar(100)
+  fileSize       BigInt    @map("file_size") @db.UnsignedBigInt /// bytes
+  s3Key          String    @map("s3_key") @db.VarChar(512) /// 정리되면 정리본 파일 키로 바뀜 (원본은 지움)
+  refinedAt      DateTime? @map("refined_at") @db.DateTime(3) /// AI가 반복·불필요한 내용을 지워 정리한 일시. NULL이면 올린 원본 그대로
+  createdAt      DateTime  @default(now()) @map("created_at") @db.DateTime(3)
+  deletedAt      DateTime? @map("deleted_at") @db.DateTime(3) /// 대화 삭제(소프트). S3 파일은 배치로 정리
+
+  user                  User                   @relation(fields: [userId], references: [userId], onDelete: Cascade, map: "fk_conversations_user")
+  documentConversations DocumentConversation[]
+
+  @@index([userId, deletedAt, createdAt], map: "idx_conversations_user")
+  @@map("conversations")
+}
+
+// ---------------------------------------------------------------------
+// 3. 문서 (대시보드 = 사용자의 documents 목록)
+// ---------------------------------------------------------------------
+
+/// 지식 유형
+/// 어느 유형에도 들지 않는 대화는 문서를 만들지 않고 대화 파일을 정리해 대화 목록에 돌려줌 (documents.status NOT_KNOWLEDGE)
+enum Category {
+  IDEA_NOTE // 아이디어 노트: 하나의 아이디어를 중심으로 배경과 구체적인 내용
+  CONCEPT_NOTE // 개념·용어 노트: 정의, 원리, 예시
+  LIST // 리스트: 후보·비교·아이디어 목록의 맥락과 목적
+  MANUAL // 매뉴얼: 도구·서비스·규칙 등의 절차
+}
+
+enum DocumentStatus {
+  GENERATING // 첫 초안 생성 중 (AI 서버 분석 + GPT 호출. prompt가 NULL이면 분석 단계)
+  DRAFT_GENERATED // 초안 생성 완료, 검토 중 (AI 보완 중에도 유지)
+  FINALIZED // 초안 채택 완료, 편집 가능
+  FAILED // 첫 초안 생성 실패 (재시도)
+  NOT_KNOWLEDGE // 지식 유형에 들지 않아 문서를 만들지 않음. 대화 파일은 정리돼 대화 목록에 남음 (끝난 상태)
+}
+
+model Document {
+  documentId   BigInt         @id @default(autoincrement()) @map("document_id") @db.UnsignedBigInt
+  userId       BigInt         @map("user_id") @db.UnsignedBigInt
+  title        String?        @db.VarChar(255)
+  content      String?        @db.LongText
+  summary      String?        @db.VarChar(512)
+  category     Category?
+  prompt       String?        @db.MediumText /// AI 서버가 돌려준 첫 초안용 GPT 프롬프트. 첫 초안 GPT 호출이 실패하면 AI 서버를 다시 부르지 않고 재사용. NULL이면 분석 전/분석 실패
+  status       DocumentStatus @default(GENERATING)
+  finalizedAt  DateTime?      @map("finalized_at") @db.DateTime(3) /// 최종 채택 일시. 관리자 초안 검토 현황(채택률·평균 초안 수)의 기준일
+  lastViewedAt DateTime       @default(now()) @map("last_viewed_at") @db.DateTime(3)
+  createdAt    DateTime       @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt    DateTime       @updatedAt @map("updated_at") @db.DateTime(3)
+  deletedAt    DateTime?      @map("deleted_at") @db.DateTime(3)
+
+  user     User                   @relation(fields: [userId], references: [userId], onDelete: Cascade, map: "fk_documents_user")
+  drafts   Draft[]
+  sources  DocumentConversation[]
+  keywords DocumentKeyword[]
+
+  @@index([userId, deletedAt, updatedAt], map: "idx_documents_dashboard")
+  @@index([userId, category], map: "idx_documents_category")
+  @@index([createdAt], map: "idx_documents_created") // 관리자 지표: 기간별 문서 생성 수
+  @@index([finalizedAt], map: "idx_documents_finalized") // 관리자 지표: 최종 채택일 기준 집계
+  // 한글 검색용 FULLTEXT. Prisma 스키마로는 ngram 파서를 지정할 수 없어서
+  // 마이그레이션 SQL에서 WITH PARSER ngram을 직접 붙임
+  @@fulltext([title, content], map: "ftx_documents_search")
+  @@map("documents")
+}
+
+/// 문서를 만들 때 분석 대상으로 고른 대화 (N:M). 원본 대조·연결된 원문 열람에 사용
+model DocumentConversation {
+  documentConversationId BigInt   @id @default(autoincrement()) @map("document_conversation_id") @db.UnsignedBigInt
+  documentId             BigInt   @map("document_id") @db.UnsignedBigInt
+  conversationId         BigInt   @map("conversation_id") @db.UnsignedBigInt
+  createdAt              DateTime @default(now()) @map("created_at") @db.DateTime(3)
+
+  document     Document     @relation(fields: [documentId], references: [documentId], onDelete: Cascade, map: "fk_document_conversations_document")
+  conversation Conversation @relation(fields: [conversationId], references: [conversationId], onDelete: Cascade, map: "fk_document_conversations_conversation")
+
+  @@unique([documentId, conversationId], map: "uk_document_conversations")
+  @@index([conversationId], map: "idx_document_conversations_conversation")
+  @@map("document_conversations")
+}
+
+model DocumentKeyword {
+  documentKeywordId BigInt @id @default(autoincrement()) @map("document_keyword_id") @db.UnsignedBigInt
+  documentId        BigInt @map("document_id") @db.UnsignedBigInt
+  keyword           String @db.VarChar(50)
+
+  document Document @relation(fields: [documentId], references: [documentId], onDelete: Cascade, map: "fk_document_keywords_document")
+
+  @@unique([documentId, keyword], map: "uk_document_keywords")
+  @@index([keyword], map: "idx_document_keywords_keyword")
+  @@map("document_keywords")
+}
+
+// ---------------------------------------------------------------------
+// 4. 초안 (회차별로 쌓임. AI 보완을 요청해도 이전 회차는 그대로 남고, 어느 회차든 최종 채택 가능)
+// ---------------------------------------------------------------------
+
+enum DraftStatus {
+  GENERATING
+  GENERATED
+  ACCEPTED
+  FAILED
+  NOT_KNOWLEDGE // 첫 초안 분석 결과 지식 유형에 들지 않음 (실패 아님, 재시도 없음). 문서도 NOT_KNOWLEDGE
+}
+
+/// 생성 실패 원인 (관리자 실패 목록)
+enum FailReason {
+  ANALYSIS_FAILED // AI 서버가 대화 분석 실패로 응답 (첫 초안)
+  GPT_FAILED // 백엔드의 GPT 호출 오류 (첫 초안)
+  REVISION_FAILED // AI 서버가 보완 실패로 응답
+  INVALID_RESPONSE // 응답 JSON 형식이 맞지 않음 (zod 검증 실패)
+  TIMEOUT // 응답이 오지 않아 배치가 실패 처리
+}
+
+/// 초안 생성 시도 1번 = 1행. 첫 초안, AI 보완, 실패 후 재시도 모두 새 행을 만든다.
+/// 재시도 행은 실패한 행과 같은 version_no·parent_draft_id를 쓰고, 실패한 행은 FAILED로 남는다.
+/// 그래서 관리자 통계의 시도·실패 횟수와 실패 목록을 이 테이블만으로 계산한다.
+model Draft {
+  draftId       BigInt      @id @default(autoincrement()) @map("draft_id") @db.UnsignedBigInt
+  documentId    BigInt      @map("document_id") @db.UnsignedBigInt
+  parentDraftId BigInt?     @map("parent_draft_id") @db.UnsignedBigInt
+  versionNo     Int         @map("version_no") @db.UnsignedInt
+  title         String?     @db.VarChar(255) /// GPT가 준 값. 검토 중 사용자가 직접 고치면 덮어씀
+  content       String?     @db.LongText /// 위와 같음
+  summary       String?     @db.VarChar(512)
+  category      Category?
+  keywords      Json?
+  status        DraftStatus @default(GENERATING)
+  failReason    FailReason? @map("fail_reason") /// FAILED일 때만
+  errorMessage  String?     @map("error_message") @db.VarChar(1000) /// AI 서버·OpenAI가 준 에러 메시지 (FAILED일 때만, 길면 잘라서 저장)
+  createdAt     DateTime    @default(now()) @map("created_at") @db.DateTime(3) /// 생성 요청(시도 시작) 일시
+
+  document  Document        @relation(fields: [documentId], references: [documentId], onDelete: Cascade, map: "fk_drafts_document")
+  parent    Draft?          @relation("DraftRevision", fields: [parentDraftId], references: [draftId], onDelete: SetNull, map: "fk_drafts_parent")
+  children  Draft[]         @relation("DraftRevision")
+  feedbacks DraftFeedback[]
+
+  @@index([documentId, versionNo], map: "idx_drafts_version") // 재시도는 같은 회차 번호로 새 행을 만들어서 UNIQUE가 아님
+  @@index([parentDraftId], map: "idx_drafts_parent")
+  @@index([createdAt], map: "idx_drafts_created") // 관리자 지표: 기간별 시도·실패·보완 요청
+  @@map("drafts")
+}
+
+/// AI 보완 요청 패널(P04)의 보완 항목
+enum FeedbackReason {
+  TOO_LONG // 분량 줄이기
+  MISSING_CONTENT // 누락 내용 보완 (연결 원문이 모두 삭제됐으면 선택 불가)
+}
+
+/// AI 보완으로 만든 초안(v2 이상)에 붙는 보완 항목. 선택 1개당 1행
+model DraftFeedback {
+  draftFeedbackId BigInt         @id @default(autoincrement()) @map("draft_feedback_id") @db.UnsignedBigInt
+  draftId         BigInt         @map("draft_id") @db.UnsignedBigInt
+  reason          FeedbackReason
+
+  draft Draft @relation(fields: [draftId], references: [draftId], onDelete: Cascade, map: "fk_draft_feedbacks_draft")
+
+  @@unique([draftId, reason], map: "uk_draft_feedbacks")
+  @@map("draft_feedbacks")
+}
