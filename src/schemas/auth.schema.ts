@@ -15,7 +15,7 @@ export const userSchema = z
         email: z.string().meta({ example: "dahyun@example.com" }),
         nickname: z.string().meta({ example: "다현" }),
         role: z.enum(["USER", "ADMIN"]),
-        createdAt: z.iso.datetime(),
+        createdAt: z.date().meta({ description: "가입 일시 (ISO 8601 UTC)" }),
     })
     .meta({ id: "User" });
 
@@ -27,6 +27,5 @@ export const loginResponseSchema = z
     })
     .meta({ id: "LoginResponse" });
 
-// 타입도 스키마에서 뽑아 쓴다 (서비스·컨트롤러에서 사용)
 export type LoginBody = z.infer<typeof loginBodySchema>;
 export type LoginResponse = z.infer<typeof loginResponseSchema>;
