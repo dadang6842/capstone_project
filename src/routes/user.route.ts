@@ -4,6 +4,8 @@ import { userController } from "../controllers/user.controller.js";
 import { userSchema } from "../schemas/auth.schema.js";
 import { successResponse } from "../schemas/common.schema.js";
 import { registry, errorResponses, bearerAuth } from "../docs/openapi.js";
+import { validate } from "../middlewares/validate.js";
+import { updateNicknameBodySchema } from "../schemas/user.schema.js";
 
 const router = Router();
 
@@ -20,5 +22,22 @@ registry.registerPath({
     },
 });
 router.get("/me", authenticate, userController.getMe);
+
+registry.registerPath({
+    method: "patch",
+    path: "/users/me",
+    tags: ["User"],
+    summary: "닉네임 수정 (USER-02)",
+    security: bearerAuth,
+    request: { body: { required: true, content: { "application/json": { schema: updateNicknameBodySchema } } } },
+    responses: {
+        200: {
+            description: "수정된 회원 정보",
+            content: { "application/json": { schema: successResponse(userSchema) } },
+        },
+        ...errorResponses("VALIDATION_ERROR", "UNAUTHORIZED", "TOKEN_EXPIRED"),
+    },
+});
+router.patch("/me", authenticate, validate({ body: updateNicknameBodySchema }), userController.updateNickname);
 
 export default router;
