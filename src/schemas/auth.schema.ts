@@ -61,3 +61,4 @@ export type LoginBody = z.infer<typeof loginBodySchema>;
 export type LoginResponse = z.infer<typeof loginResponseSchema>;
 export type RefreshTokenBody = z.infer<typeof refreshTokenBodySchema>;
 export type TokenResponse = z.infer<typeof tokenResponseSchema>;
+export type UserResponse = z.infer<typeof userSchema>;
