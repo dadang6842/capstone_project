@@ -20,7 +20,7 @@ model User {
   userId    BigInt    @id @default(autoincrement()) @map("user_id") @db.UnsignedBigInt
   email     String    @unique(map: "uk_users_email") @db.VarChar(100)
   password  String    @db.VarChar(255) /// bcrypt 해시
-  nickname  String    @db.VarChar(8) /// 1~8자 (앞뒤 공백 제거, 공백만 있는 값 불가)
+  nickname  String    @db.VarChar(12) /// 1~12자 (앞뒤 공백 제거, 공백만 있는 값 불가)
   role      UserRole  @default(USER) /// ADMIN이면 관리자 웹(/api/v1/admin/*) 사용 가능
   createdAt DateTime  @default(now()) @map("created_at") @db.DateTime(3)
   updatedAt DateTime  @updatedAt @map("updated_at") @db.DateTime(3)

@@ -1,4 +1,4 @@
-// 에러 코드 목록 (API 명세서 에러 코드 표 기준)
+// 에러 코드 목록
 // 서비스는 throw new AppError("INVALID_CREDENTIALS")처럼 이름만 쓰고,
 // 상태 코드와 기본 메시지는 여기서 가져온다. 스웨거 문서의 에러 응답도 이 목록으로 만든다.
 export const ERRORS = {
