@@ -6,10 +6,10 @@ import { AppError } from "../utils/appError.js";
 import { signAccessToken, signRefreshToken, verifyRefreshToken } from "../utils/jwt.js";
 import type { SignupBody, LoginBody, LoginResponse, RefreshTokenBody, TokenResponse } from "../schemas/auth.schema.js";
 
-const BCRYPT_ROUNDS = 10;
+export const BCRYPT_ROUNDS = 10;
 
 // 로그인·회원가입 공통: 토큰을 발급하고 refresh 토큰을 저장한 뒤 응답 형태로 만든다
-async function issueTokens(user: User): Promise<LoginResponse> {
+export async function issueTokens(user: User): Promise<LoginResponse> {
     const userId = Number(user.userId);
     const accessToken = signAccessToken({ userId, role: user.role });
     const refresh = signRefreshToken(userId);
