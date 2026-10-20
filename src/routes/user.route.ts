@@ -1,11 +1,11 @@
 import { Router } from "express";
 import { authenticate } from "../middlewares/authenticate.js";
 import { userController } from "../controllers/user.controller.js";
-import { userSchema } from "../schemas/auth.schema.js";
+import { userSchema, tokenResponseSchema } from "../schemas/auth.schema.js";
 import { successResponse } from "../schemas/common.schema.js";
 import { registry, errorResponses, bearerAuth } from "../docs/openapi.js";
 import { validate } from "../middlewares/validate.js";
-import { updateNicknameBodySchema } from "../schemas/user.schema.js";
+import { updateNicknameBodySchema, changePasswordBodySchema } from "../schemas/user.schema.js";
 
 const router = Router();
 
@@ -39,5 +39,24 @@ registry.registerPath({
     },
 });
 router.patch("/me", authenticate, validate({ body: updateNicknameBodySchema }), userController.updateNickname);
+
+registry.registerPath({
+    method: "patch",
+    path: "/users/me/password",
+    tags: ["User"],
+    summary: "비밀번호 변경 (USER-03)",
+    description:
+        "다른 기기의 로그인은 모두 끊고(refresh 토큰 전부 폐기), 지금 기기용 새 토큰을 준다. 프론트는 받은 토큰으로 바꿔 저장한다.",
+    security: bearerAuth,
+    request: { body: { required: true, content: { "application/json": { schema: changePasswordBodySchema } } } },
+    responses: {
+        200: {
+            description: "변경 성공, 새 토큰",
+            content: { "application/json": { schema: successResponse(tokenResponseSchema) } },
+        },
+        ...errorResponses("VALIDATION_ERROR", "INVALID_PASSWORD", "UNAUTHORIZED", "TOKEN_EXPIRED"),
+    },
+});
+router.patch("/me/password", authenticate, validate({ body: changePasswordBodySchema }), userController.changePassword);
 
 export default router;

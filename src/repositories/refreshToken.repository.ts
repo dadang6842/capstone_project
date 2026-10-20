@@ -33,4 +33,12 @@ export const refreshTokenRepository = {
             data: { revokedAt: new Date() },
         });
     },
+
+    // 비밀번호 변경·탈퇴 때 이 회원의 모든 기기 로그인을 끊는다
+    revokeAllByUser(userId: bigint) {
+        return prisma.refreshToken.updateMany({
+            where: { userId, revokedAt: null },
+            data: { revokedAt: new Date() },
+        });
+    },
 };
