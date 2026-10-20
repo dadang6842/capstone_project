@@ -1,17 +1,22 @@
 import { z } from "zod";
 
+// 비밀번호·닉네임 규칙: 회원가입, 비밀번호 변경, 닉네임 수정에서 같이 쓴다
+export const passwordField = z
+    .string()
+    .min(8)
+    .max(20)
+    .regex(/[A-Za-z]/, "영문을 1자 이상 포함해야 합니다.")
+    .regex(/[0-9]/, "숫자를 1자 이상 포함해야 합니다.")
+    .meta({ example: "silo2026!", description: "8~20자, 영문과 숫자 포함" });
+
+// trim()으로 앞뒤 공백을 지운 뒤 길이를 검사하므로 공백만 있는 값은 min(1)에서 걸린다
+export const nicknameField = z.string().trim().min(1).max(12).meta({ example: "다현", description: "1~12자" });
+
 export const signupBodySchema = z
     .object({
         email: z.email().max(100).meta({ example: "dahyun@example.com" }),
-        password: z
-            .string()
-            .min(8)
-            .max(20)
-            .regex(/[A-Za-z]/, "영문을 1자 이상 포함해야 합니다.")
-            .regex(/[0-9]/, "숫자를 1자 이상 포함해야 합니다.")
-            .meta({ example: "silo2026!", description: "8~20자, 영문과 숫자 포함" }),
-        // trim()으로 앞뒤 공백을 지운 뒤 길이를 검사하므로 공백만 있는 값은 min(1)에서 걸린다
-        nickname: z.string().trim().min(1).max(12).meta({ example: "다현", description: "1~12자" }),
+        password: passwordField,
+        nickname: nicknameField,
     })
     .meta({ id: "SignupRequest" });
 
@@ -61,3 +66,4 @@ export type LoginBody = z.infer<typeof loginBodySchema>;
 export type LoginResponse = z.infer<typeof loginResponseSchema>;
 export type RefreshTokenBody = z.infer<typeof refreshTokenBodySchema>;
 export type TokenResponse = z.infer<typeof tokenResponseSchema>;
+export type UserResponse = z.infer<typeof userSchema>;

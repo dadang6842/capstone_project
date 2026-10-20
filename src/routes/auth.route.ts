@@ -53,6 +53,24 @@ router.post("/login", validate({ body: loginBodySchema }), authController.login)
 
 registry.registerPath({
     method: "post",
+    path: "/auth/withdrawal/cancel",
+    tags: ["Auth"],
+    summary: "탈퇴 취소 (AUTH-06)",
+    description:
+        "탈퇴 유예 중 로그인해서 403 WITHDRAWAL_PENDING을 받은 사용자가 취소를 확인하면 호출한다. deleted_at을 되돌리고 로그인처럼 토큰을 준다.",
+    request: { body: { required: true, content: { "application/json": { schema: loginBodySchema } } } },
+    responses: {
+        200: {
+            description: "탈퇴 취소 + 로그인 성공",
+            content: { "application/json": { schema: successResponse(loginResponseSchema) } },
+        },
+        ...errorResponses("VALIDATION_ERROR", "INVALID_CREDENTIALS", "WITHDRAWAL_NOT_REQUESTED"),
+    },
+});
+router.post("/withdrawal/cancel", validate({ body: loginBodySchema }), authController.cancelWithdrawal);
+
+registry.registerPath({
+    method: "post",
     path: "/auth/refresh",
     tags: ["Auth"],
     summary: "토큰 재발급 (AUTH-04)",

@@ -6,10 +6,10 @@ import { AppError } from "../utils/appError.js";
 import { signAccessToken, signRefreshToken, verifyRefreshToken } from "../utils/jwt.js";
 import type { SignupBody, LoginBody, LoginResponse, RefreshTokenBody, TokenResponse } from "../schemas/auth.schema.js";
 
-const BCRYPT_ROUNDS = 10;
+export const BCRYPT_ROUNDS = 10;
 
 // 로그인·회원가입 공통: 토큰을 발급하고 refresh 토큰을 저장한 뒤 응답 형태로 만든다
-async function issueTokens(user: User): Promise<LoginResponse> {
+export async function issueTokens(user: User): Promise<LoginResponse> {
     const userId = Number(user.userId);
     const accessToken = signAccessToken({ userId, role: user.role });
     const refresh = signRefreshToken(userId);
@@ -54,6 +54,18 @@ export const authService = {
         }
 
         return issueTokens(user);
+    },
+
+    // 탈퇴 유예 중 로그인했을 때(403 WITHDRAWAL_PENDING) 프론트가 확인 팝업 후 호출한다
+    async cancelWithdrawal({ email, password }: LoginBody): Promise<LoginResponse> {
+        const user = await userRepository.findByEmail(email);
+        if (!user || !(await bcrypt.compare(password, user.password))) {
+            throw new AppError("INVALID_CREDENTIALS");
+        }
+        if (!user.deletedAt) throw new AppError("WITHDRAWAL_NOT_REQUESTED");
+
+        const restored = await userRepository.update(user.userId, { deletedAt: null });
+        return issueTokens(restored);
     },
 
     async refresh({ refreshToken }: RefreshTokenBody): Promise<TokenResponse> {
