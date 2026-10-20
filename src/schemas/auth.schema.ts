@@ -27,5 +27,21 @@ export const loginResponseSchema = z
     })
     .meta({ id: "LoginResponse" });
 
+// 토큰 재발급(AUTH-04), 로그아웃(AUTH-05) 요청
+export const refreshTokenBodySchema = z
+    .object({
+        refreshToken: z.string().min(1).meta({ description: "보유 중인 Refresh Token" }),
+    })
+    .meta({ id: "RefreshTokenRequest" });
+
+export const tokenResponseSchema = z
+    .object({
+        accessToken: z.string().meta({ description: "유효기간 30분" }),
+        refreshToken: z.string().meta({ description: "새 Refresh Token (유효기간 14일). 기존 토큰은 폐기됨" }),
+    })
+    .meta({ id: "TokenResponse" });
+
 export type LoginBody = z.infer<typeof loginBodySchema>;
 export type LoginResponse = z.infer<typeof loginResponseSchema>;
+export type RefreshTokenBody = z.infer<typeof refreshTokenBodySchema>;
+export type TokenResponse = z.infer<typeof tokenResponseSchema>;

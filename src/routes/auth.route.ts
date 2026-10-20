@@ -1,9 +1,16 @@
 import { Router } from "express";
 import { validate } from "../middlewares/validate.js";
+import { authenticate } from "../middlewares/authenticate.js";
 import { authController } from "../controllers/auth.controller.js";
-import { loginBodySchema, loginResponseSchema } from "../schemas/auth.schema.js";
+import {
+    loginBodySchema,
+    loginResponseSchema,
+    refreshTokenBodySchema,
+    tokenResponseSchema,
+} from "../schemas/auth.schema.js";
+import { z } from "zod";
 import { successResponse } from "../schemas/common.schema.js";
-import { registry, errorResponses } from "../docs/openapi.js";
+import { registry, errorResponses, bearerAuth } from "../docs/openapi.js";
 
 const router = Router();
 
@@ -24,5 +31,39 @@ registry.registerPath({
     },
 });
 router.post("/login", validate({ body: loginBodySchema }), authController.login);
+
+registry.registerPath({
+    method: "post",
+    path: "/auth/refresh",
+    tags: ["Auth"],
+    summary: "토큰 재발급 (AUTH-04)",
+    description:
+        "Access Token이 만료(401 TOKEN_EXPIRED)되면 Refresh Token으로 새 토큰 쌍을 받는다. 기존 Refresh Token은 폐기된다(토큰 회전). INVALID_TOKEN이면 다시 로그인해야 한다.",
+    request: { body: { required: true, content: { "application/json": { schema: refreshTokenBodySchema } } } },
+    responses: {
+        200: {
+            description: "재발급 성공",
+            content: { "application/json": { schema: successResponse(tokenResponseSchema) } },
+        },
+        ...errorResponses("VALIDATION_ERROR", "INVALID_TOKEN"),
+    },
+});
+router.post("/refresh", validate({ body: refreshTokenBodySchema }), authController.refresh);
+
+registry.registerPath({
+    method: "post",
+    path: "/auth/logout",
+    tags: ["Auth"],
+    summary: "로그아웃 (AUTH-05)",
+    description:
+        "현재 기기의 Refresh Token을 폐기한다. Access Token은 프론트가 삭제한다. 다른 기기의 로그인은 유지된다.",
+    security: bearerAuth,
+    request: { body: { required: true, content: { "application/json": { schema: refreshTokenBodySchema } } } },
+    responses: {
+        200: { description: "로그아웃 성공", content: { "application/json": { schema: successResponse(z.null()) } } },
+        ...errorResponses("VALIDATION_ERROR", "UNAUTHORIZED", "TOKEN_EXPIRED"),
+    },
+});
+router.post("/logout", authenticate, validate({ body: refreshTokenBodySchema }), authController.logout);
 
 export default router;
