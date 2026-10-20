@@ -1,5 +1,20 @@
 import { z } from "zod";
 
+export const signupBodySchema = z
+    .object({
+        email: z.email().max(100).meta({ example: "dahyun@example.com" }),
+        password: z
+            .string()
+            .min(8)
+            .max(20)
+            .regex(/[A-Za-z]/, "영문을 1자 이상 포함해야 합니다.")
+            .regex(/[0-9]/, "숫자를 1자 이상 포함해야 합니다.")
+            .meta({ example: "silo2026!", description: "8~20자, 영문과 숫자 포함" }),
+        // trim()으로 앞뒤 공백을 지운 뒤 길이를 검사하므로 공백만 있는 값은 min(1)에서 걸린다
+        nickname: z.string().trim().min(1).max(12).meta({ example: "다현", description: "1~12자" }),
+    })
+    .meta({ id: "SignupRequest" });
+
 // 요청: validate 미들웨어와 스웨거 문서가 둘 다 이 스키마를 쓴다
 export const loginBodySchema = z
     .object({
@@ -41,6 +56,7 @@ export const tokenResponseSchema = z
     })
     .meta({ id: "TokenResponse" });
 
+export type SignupBody = z.infer<typeof signupBodySchema>;
 export type LoginBody = z.infer<typeof loginBodySchema>;
 export type LoginResponse = z.infer<typeof loginResponseSchema>;
 export type RefreshTokenBody = z.infer<typeof refreshTokenBodySchema>;

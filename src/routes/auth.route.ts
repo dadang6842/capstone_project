@@ -3,6 +3,7 @@ import { validate } from "../middlewares/validate.js";
 import { authenticate } from "../middlewares/authenticate.js";
 import { authController } from "../controllers/auth.controller.js";
 import {
+    signupBodySchema,
     loginBodySchema,
     loginResponseSchema,
     refreshTokenBodySchema,
@@ -13,6 +14,24 @@ import { successResponse } from "../schemas/common.schema.js";
 import { registry, errorResponses, bearerAuth } from "../docs/openapi.js";
 
 const router = Router();
+
+registry.registerPath({
+    method: "post",
+    path: "/auth/signup",
+    tags: ["Auth"],
+    summary: "회원가입 (AUTH-02)",
+    description:
+        "이메일 중복 검사도 여기서 한다(별도 API 없음). 탈퇴 유예 중인 계정의 이메일도 409 EMAIL_DUPLICATED. 가입하면 바로 로그인 상태가 되도록 토큰을 함께 준다.",
+    request: { body: { required: true, content: { "application/json": { schema: signupBodySchema } } } },
+    responses: {
+        201: {
+            description: "가입 성공",
+            content: { "application/json": { schema: successResponse(loginResponseSchema) } },
+        },
+        ...errorResponses("VALIDATION_ERROR", "EMAIL_DUPLICATED"),
+    },
+});
+router.post("/signup", validate({ body: signupBodySchema }), authController.signup);
 
 registry.registerPath({
     method: "post",

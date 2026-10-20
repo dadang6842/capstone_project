@@ -1,9 +1,14 @@
 import type { Request, Response } from "express";
 import { authService } from "../services/auth.service.js";
 import { sendSuccess } from "../utils/response.js";
-import type { LoginBody, RefreshTokenBody } from "../schemas/auth.schema.js";
+import type { SignupBody, LoginBody, RefreshTokenBody } from "../schemas/auth.schema.js";
 
 export const authController = {
+    async signup(req: Request, res: Response) {
+        const result = await authService.signup(req.body as SignupBody);
+        sendSuccess(res, result, 201);
+    },
+
     async login(req: Request, res: Response) {
         const result = await authService.login(req.body as LoginBody);
         sendSuccess(res, result);

@@ -1,11 +1,45 @@
 import bcrypt from "bcrypt";
+import { Prisma, type User } from "../generated/prisma/client.js";
 import { userRepository } from "../repositories/user.repository.js";
 import { refreshTokenRepository } from "../repositories/refreshToken.repository.js";
 import { AppError } from "../utils/appError.js";
 import { signAccessToken, signRefreshToken, verifyRefreshToken } from "../utils/jwt.js";
-import type { LoginBody, LoginResponse, RefreshTokenBody, TokenResponse } from "../schemas/auth.schema.js";
+import type { SignupBody, LoginBody, LoginResponse, RefreshTokenBody, TokenResponse } from "../schemas/auth.schema.js";
+
+const BCRYPT_ROUNDS = 10;
+
+// 로그인·회원가입 공통: 토큰을 발급하고 refresh 토큰을 저장한 뒤 응답 형태로 만든다
+async function issueTokens(user: User): Promise<LoginResponse> {
+    const userId = Number(user.userId);
+    const accessToken = signAccessToken({ userId, role: user.role });
+    const refresh = signRefreshToken(userId);
+    await refreshTokenRepository.create({ userId: user.userId, token: refresh.token, expiresAt: refresh.expiresAt });
+
+    return {
+        user: { userId, email: user.email, nickname: user.nickname, role: user.role, createdAt: user.createdAt },
+        accessToken,
+        refreshToken: refresh.token,
+    };
+}
 
 export const authService = {
+    async signup({ email, password, nickname }: SignupBody): Promise<LoginResponse> {
+        // 탈퇴 유예 중인 계정도 행이 남아 있으므로 여기서 같이 걸린다
+        if (await userRepository.findByEmail(email)) throw new AppError("EMAIL_DUPLICATED");
+
+        const hashed = await bcrypt.hash(password, BCRYPT_ROUNDS);
+        try {
+            const user = await userRepository.create({ email, password: hashed, nickname });
+            return await issueTokens(user);
+        } catch (err) {
+            // 같은 이메일로 동시에 가입하면 위 확인을 둘 다 통과할 수 있어서, DB UNIQUE 위반(P2002)도 중복으로 처리
+            if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+                throw new AppError("EMAIL_DUPLICATED");
+            }
+            throw err;
+        }
+    },
+
     async login({ email, password }: LoginBody): Promise<LoginResponse> {
         const user = await userRepository.findByEmail(email);
 
@@ -19,20 +53,7 @@ export const authService = {
             throw new AppError("WITHDRAWAL_PENDING", { details: { withdrawalRequestedAt: user.deletedAt } });
         }
 
-        const userId = Number(user.userId);
-        const accessToken = signAccessToken({ userId, role: user.role });
-        const refresh = signRefreshToken(userId);
-        await refreshTokenRepository.create({
-            userId: user.userId,
-            token: refresh.token,
-            expiresAt: refresh.expiresAt,
-        });
-
-        return {
-            user: { userId, email: user.email, nickname: user.nickname, role: user.role, createdAt: user.createdAt },
-            accessToken,
-            refreshToken: refresh.token,
-        };
+        return issueTokens(user);
     },
 
     async refresh({ refreshToken }: RefreshTokenBody): Promise<TokenResponse> {
