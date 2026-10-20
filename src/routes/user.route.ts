@@ -5,7 +5,12 @@ import { userSchema, tokenResponseSchema } from "../schemas/auth.schema.js";
 import { successResponse } from "../schemas/common.schema.js";
 import { registry, errorResponses, bearerAuth } from "../docs/openapi.js";
 import { validate } from "../middlewares/validate.js";
-import { updateNicknameBodySchema, changePasswordBodySchema } from "../schemas/user.schema.js";
+import {
+    updateNicknameBodySchema,
+    changePasswordBodySchema,
+    withdrawBodySchema,
+    withdrawResponseSchema,
+} from "../schemas/user.schema.js";
 
 const router = Router();
 
@@ -58,5 +63,24 @@ registry.registerPath({
     },
 });
 router.patch("/me/password", authenticate, validate({ body: changePasswordBodySchema }), userController.changePassword);
+
+registry.registerPath({
+    method: "delete",
+    path: "/users/me",
+    tags: ["User"],
+    summary: "회원 탈퇴 (USER-04)",
+    description:
+        "deleted_at을 채우고 모든 기기 로그인을 끊는다. 7일 안에 로그인하면 탈퇴 취소(AUTH-06) 가능. 프론트는 성공하면 토큰을 지우고 로그아웃 처리한다.",
+    security: bearerAuth,
+    request: { body: { required: true, content: { "application/json": { schema: withdrawBodySchema } } } },
+    responses: {
+        200: {
+            description: "탈퇴 요청 완료",
+            content: { "application/json": { schema: successResponse(withdrawResponseSchema) } },
+        },
+        ...errorResponses("VALIDATION_ERROR", "INVALID_PASSWORD", "UNAUTHORIZED", "TOKEN_EXPIRED"),
+    },
+});
+router.delete("/me", authenticate, validate({ body: withdrawBodySchema }), userController.withdraw);
 
 export default router;

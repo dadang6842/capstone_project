@@ -5,7 +5,9 @@ import type { User } from "../generated/prisma/client.js";
 import { userRepository } from "../repositories/user.repository.js";
 import { AppError } from "../utils/appError.js";
 import type { TokenResponse, UserResponse } from "../schemas/auth.schema.js";
-import type { ChangePasswordBody, UpdateNicknameBody } from "../schemas/user.schema.js";
+import type { ChangePasswordBody, UpdateNicknameBody, WithdrawBody, WithdrawResponse } from "../schemas/user.schema.js";
+
+const WITHDRAWAL_GRACE_DAYS = 7;
 
 // 토큰은 유효해도 그사이 탈퇴 요청을 했으면(access 토큰은 최대 30분 남아 있음) 로그인이 끊긴 것으로 본다
 async function findActiveUser(userId: number) {
@@ -43,5 +45,17 @@ export const userService = {
         await refreshTokenRepository.revokeAllByUser(user.userId);
         const { accessToken, refreshToken } = await issueTokens(user);
         return { accessToken, refreshToken };
+    },
+
+    // 바로 지우지 않고 deleted_at만 채운다. 7일 안에 로그인하면 탈퇴 취소(AUTH-06) 가능
+    async withdraw(userId: number, { password }: WithdrawBody): Promise<WithdrawResponse> {
+        const user = await findActiveUser(userId);
+        if (!(await bcrypt.compare(password, user.password))) throw new AppError("INVALID_PASSWORD");
+
+        const { deletedAt } = await userRepository.update(user.userId, { deletedAt: new Date() });
+        await refreshTokenRepository.revokeAllByUser(user.userId);
+
+        const permanentDeleteAt = new Date(deletedAt!.getTime() + WITHDRAWAL_GRACE_DAYS * 24 * 60 * 60 * 1000);
+        return { deletedAt: deletedAt!, permanentDeleteAt };
     },
 };

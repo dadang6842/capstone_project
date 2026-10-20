@@ -56,6 +56,18 @@ export const authService = {
         return issueTokens(user);
     },
 
+    // 탈퇴 유예 중 로그인했을 때(403 WITHDRAWAL_PENDING) 프론트가 확인 팝업 후 호출한다
+    async cancelWithdrawal({ email, password }: LoginBody): Promise<LoginResponse> {
+        const user = await userRepository.findByEmail(email);
+        if (!user || !(await bcrypt.compare(password, user.password))) {
+            throw new AppError("INVALID_CREDENTIALS");
+        }
+        if (!user.deletedAt) throw new AppError("WITHDRAWAL_NOT_REQUESTED");
+
+        const restored = await userRepository.update(user.userId, { deletedAt: null });
+        return issueTokens(restored);
+    },
+
     async refresh({ refreshToken }: RefreshTokenBody): Promise<TokenResponse> {
         // 1) 서명·만료 확인
         try {

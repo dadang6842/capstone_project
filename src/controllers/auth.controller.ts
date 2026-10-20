@@ -14,6 +14,11 @@ export const authController = {
         sendSuccess(res, result);
     },
 
+    async cancelWithdrawal(req: Request, res: Response) {
+        const result = await authService.cancelWithdrawal(req.body as LoginBody);
+        sendSuccess(res, result);
+    },
+
     async refresh(req: Request, res: Response) {
         const result = await authService.refresh(req.body as RefreshTokenBody);
         sendSuccess(res, result);
