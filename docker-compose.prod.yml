@@ -1,0 +1,16 @@
+# EC2에서 쓰는 실행용 compose (이미지는 GitHub Actions가 빌드해서 Docker Hub에 올림)
+services:
+    app:
+        image: ${IMAGE}
+        container_name: capstone
+        restart: always
+        env_file: .env
+        # Nginx(EC2에 설치)가 80번으로 받아서 localhost:3000으로 넘겨 줌
+        # 127.0.0.1로 묶어서 외부에서 3000번으로 직접 들어오는 건 막음
+        ports:
+            - "127.0.0.1:3000:3000"
+        logging:
+            driver: json-file
+            options:
+                max-size: "10m"
+                max-file: "3"

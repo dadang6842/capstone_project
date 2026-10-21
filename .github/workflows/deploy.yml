@@ -1,0 +1,89 @@
+name: CI/CD
+
+on:
+    pull_request:
+        branches: [main]
+    push:
+        branches: [main]
+    workflow_dispatch:
+
+jobs:
+    # PR·push 모두: 의존성 설치 + 타입 검사/빌드
+    build:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: 22
+                  cache: npm
+
+            # postinstall(prisma generate)이 prisma.config.ts의 DATABASE_URL을 요구해서 가짜 값을 넣음
+            - run: npm ci
+              env:
+                  DATABASE_URL: mysql://build:build@localhost:3306/build
+
+            - run: npm run build
+
+    # main에 push될 때만: 이미지 빌드 → Docker Hub에 올림 → EC2에서 받아서 실행
+    deploy:
+        needs: build
+        if: github.event_name != 'pull_request'
+        runs-on: ubuntu-latest
+        env:
+            IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/capstone
+        steps:
+            - uses: actions/checkout@v4
+
+            - uses: docker/setup-buildx-action@v3
+
+            - uses: docker/login-action@v3
+              with:
+                  username: ${{ secrets.DOCKERHUB_USERNAME }}
+                  password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+            - uses: docker/build-push-action@v6
+              with:
+                  context: .
+                  push: true
+                  platforms: linux/amd64
+                  tags: |
+                      ${{ env.IMAGE }}:latest
+                      ${{ env.IMAGE }}:${{ github.sha }}
+                  cache-from: type=gha
+                  cache-to: type=gha,mode=max
+
+            - name: compose 파일을 EC2로 복사
+              uses: appleboy/scp-action@v1
+              with:
+                  host: ${{ secrets.EC2_HOST }}
+                  username: ${{ secrets.EC2_USER }}
+                  key: ${{ secrets.EC2_SSH_KEY }}
+                  source: docker-compose.prod.yml
+                  target: ~/app
+
+            - name: EC2에서 새 이미지로 교체
+              uses: appleboy/ssh-action@v1
+              with:
+                  host: ${{ secrets.EC2_HOST }}
+                  username: ${{ secrets.EC2_USER }}
+                  key: ${{ secrets.EC2_SSH_KEY }}
+                  envs: IMAGE
+                  script: |
+                      set -e
+                      cd ~/app
+                      export IMAGE="$IMAGE:${{ github.sha }}"
+                      echo "IMAGE=$IMAGE" > .image.env
+                      docker compose -f docker-compose.prod.yml --env-file .image.env pull
+                      docker compose -f docker-compose.prod.yml --env-file .image.env up -d
+                      docker image prune -af
+
+                      # 서버가 뜰 때까지 최대 60초 헬스체크
+                      for i in $(seq 1 30); do
+                        if curl -fs http://localhost:3000/api/v1/health > /dev/null; then
+                          echo "배포 성공"; exit 0
+                        fi
+                        sleep 2
+                      done
+                      echo "헬스체크 실패"; docker logs --tail 50 capstone; exit 1
