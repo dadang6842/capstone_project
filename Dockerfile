@@ -21,7 +21,9 @@ RUN npm prune --omit=dev && npm cache clean --force
 # ---------- 2단계: 실행 ----------
 FROM node:22-alpine
 WORKDIR /app
-ENV NODE_ENV=production
+# 로그 시각을 한국 시간으로, 로그 파일은 /var/log/backend에 (EC2 디렉터리를 볼륨으로 연결)
+ENV NODE_ENV=production TZ=Asia/Seoul LOG_DIR=/var/log/backend
+RUN mkdir -p /var/log/backend && chown node:node /var/log/backend
 
 # 빌드 단계에서 필요한 것만 가져오기
 # prisma 폴더·prisma.config.ts는 컨테이너 시작 시 migrate deploy에 사용

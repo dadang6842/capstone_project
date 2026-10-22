@@ -6,6 +6,7 @@ declare global {
     namespace Express {
         interface Request {
             user: AccessPayload;
+            id: string; // requestContext 미들웨어가 넣는 로그용 요청 아이디
         }
     }
 }

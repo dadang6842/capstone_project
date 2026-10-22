@@ -73,6 +73,9 @@ jobs:
                   script: |
                       set -e
                       cd ~/app
+                      # 로그 폴더 (컨테이너의 node 사용자가 쓸 수 있게 uid 1000 소유로)
+                      sudo mkdir -p /var/log/backend
+                      sudo chown 1000:1000 /var/log/backend
                       export IMAGE="$IMAGE:${{ github.sha }}"
                       echo "IMAGE=$IMAGE" > .image.env
                       docker compose -f docker-compose.prod.yml --env-file .image.env pull

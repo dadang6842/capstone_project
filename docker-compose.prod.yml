@@ -5,6 +5,9 @@ services:
         container_name: capstone
         restart: always
         env_file: .env
+        # 로그 파일을 EC2 디스크에 남겨서 재배포해도 유지 (컨테이너 안 node 사용자 = uid 1000)
+        volumes:
+            - /var/log/backend:/var/log/backend
         # Nginx(EC2에 설치)가 80번으로 받아서 localhost:3000으로 넘겨 줌
         # 127.0.0.1로 묶어서 외부에서 3000번으로 직접 들어오는 건 막음
         ports:
