@@ -4,6 +4,8 @@ import { uploadConversationFiles } from "../middlewares/upload.js";
 import { conversationController } from "../controllers/conversation.controller.js";
 import { validate } from "../middlewares/validate.js";
 import {
+    conversationDetailSchema,
+    conversationIdParamsSchema,
     listConversationsQuerySchema,
     listConversationsResponseSchema,
     uploadConversationsBodySchema,
@@ -65,5 +67,31 @@ registry.registerPath({
     },
 });
 router.get("/", authenticate, validate({ query: listConversationsQuerySchema }), conversationController.list);
+
+registry.registerPath({
+    method: "get",
+    path: "/conversations/{conversationId}",
+    tags: ["Conversation"],
+    summary: "원본 대화 열람 (CONV-03)",
+    description:
+        "대화 정보와 원본 파일 Presigned URL(10분 유효, inline)을 준다. 프론트는 viewUrl을 iframe이나 새 탭으로 띄운다. " +
+        "원본 대화 열람, 초안 검토 중 원본 대조, 문서에 연결된 원문 열람에 모두 이 API를 쓴다. 이 대화로 만든 문서 목록도 같이 준다. " +
+        "다른 회원의 대화, 삭제한 대화는 404.",
+    security: bearerAuth,
+    request: { params: conversationIdParamsSchema },
+    responses: {
+        200: {
+            description: "대화 정보와 원본 URL",
+            content: { "application/json": { schema: successResponse(conversationDetailSchema) } },
+        },
+        ...errorResponses("VALIDATION_ERROR", "UNAUTHORIZED", "TOKEN_EXPIRED", "CONVERSATION_NOT_FOUND"),
+    },
+});
+router.get(
+    "/:conversationId",
+    authenticate,
+    validate({ params: conversationIdParamsSchema }),
+    conversationController.get,
+);
 
 export default router;

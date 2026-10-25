@@ -26,6 +26,20 @@ export const conversationRepository = {
         return prisma.conversation.create({ data });
     },
 
+    // 대화 하나와 이 대화로 만든 문서 (삭제·NOT_KNOWLEDGE 문서 제외, 최신 문서부터)
+    findByIdWithDocuments(conversationId: bigint) {
+        return prisma.conversation.findUnique({
+            where: { conversationId },
+            include: {
+                documentConversations: {
+                    where: { document: { deletedAt: null, status: { not: "NOT_KNOWLEDGE" } } },
+                    orderBy: { documentId: "desc" },
+                    select: { document: { select: { documentId: true, title: true } } },
+                },
+            },
+        });
+    },
+
     // 삭제하지 않은 내 대화를 등록일 최신순(같으면 아이디 내림차순)으로 한 페이지와 전체 개수
     findPageByUser(userId: bigint, { skip, take }: { skip: number; take: number; q?: string }) {
         const where: Prisma.ConversationWhereInput = {

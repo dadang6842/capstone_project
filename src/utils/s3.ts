@@ -1,5 +1,6 @@
 import { createReadStream } from "node:fs";
-import { DeleteObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
+import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { s3 } from "../config/s3.js";
 import { env } from "../config/env.js";
 
@@ -18,4 +19,18 @@ export async function uploadFile(params: { key: string; filePath: string; size: 
 
 export async function deleteFile(key: string) {
     await s3.send(new DeleteObjectCommand({ Bucket: env.S3_BUCKET, Key: key }));
+}
+
+// 원본 열람용 Presigned URL (10분 유효). AWS에 요청하지 않고 서버 안에서 서명만 계산한다
+// inline이라 브라우저가 내려받지 않고 바로 보여 주고, 저장할 때는 원래 파일명을 쓴다
+export function getViewUrl(key: string, filename: string) {
+    return getSignedUrl(
+        s3,
+        new GetObjectCommand({
+            Bucket: env.S3_BUCKET,
+            Key: key,
+            ResponseContentDisposition: `inline; filename*=UTF-8''${encodeURIComponent(filename)}`,
+        }),
+        { expiresIn: 600 },
+    );
 }

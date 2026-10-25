@@ -3,11 +3,12 @@ import { rm } from "node:fs/promises";
 import type { Conversation } from "../generated/prisma/client.js";
 import { conversationRepository, type ConversationWithDocuments } from "../repositories/conversation.repository.js";
 import { CONVERSATION_FILE_EXT, type FailedFile } from "../middlewares/upload.js";
-import { deleteFile, uploadFile } from "../utils/s3.js";
+import { deleteFile, getViewUrl, uploadFile } from "../utils/s3.js";
 import { AppError } from "../utils/appError.js";
 import { logger } from "../utils/logger.js";
 import { toPageInfo } from "../schemas/common.schema.js";
 import type {
+    ConversationDetail,
     ConversationListItem,
     ConversationResponse,
     ListConversationsQuery,
@@ -115,6 +116,23 @@ export const conversationService = {
 
     // 내용은 해석하지 않고 S3에 저장한 뒤 conversations에 기록만 한다 (분석은 문서를 만들 때 AI 서버가 함)
     // 파일마다 따로 저장해서, 일부가 실패해도 성공한 파일은 그대로 남긴다
+    // 다른 회원의 대화나 삭제한 대화도 없는 것과 똑같이 404로 응답한다 (있는지 여부를 알려 주지 않음)
+    async get(userId: number, conversationId: number): Promise<ConversationDetail> {
+        const conversation = await conversationRepository.findByIdWithDocuments(BigInt(conversationId));
+        if (!conversation || conversation.userId !== BigInt(userId) || conversation.deletedAt) {
+            throw new AppError("CONVERSATION_NOT_FOUND");
+        }
+
+        return {
+            ...toConversationResponse(conversation),
+            viewUrl: await getViewUrl(conversation.s3Key, conversation.filename),
+            documents: conversation.documentConversations.map(({ document }) => ({
+                documentId: Number(document.documentId),
+                title: document.title,
+            })),
+        };
+    },
+
     async upload(
         userId: number,
         files: Express.Multer.File[],

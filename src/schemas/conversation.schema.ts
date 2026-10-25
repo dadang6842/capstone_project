@@ -70,8 +70,32 @@ export const listConversationsResponseSchema = z
     .object({ ...pageInfoShape, conversations: z.array(conversationListItemSchema) })
     .meta({ id: "ListConversationsResponse" });
 
+// 원본 대화 열람(CONV-03)
+export const conversationIdParamsSchema = z.object({
+    conversationId: z.coerce.number().int().positive().meta({ description: "대화 아이디" }),
+});
+
+export const conversationDetailSchema = conversationSchema
+    .extend({
+        viewUrl: z.string().meta({ description: "원본 파일 Presigned URL (10분 유효)." }),
+        documents: z
+            .array(
+                z.object({
+                    documentId: z.number().int().meta({ example: 12 }),
+                    title: z
+                        .string()
+                        .nullable()
+                        .meta({ example: "JWT 인증 흐름 정리", description: "문서 제목 (채택 전 null)" }),
+                }),
+            )
+            .meta({ description: "이 대화로 만든 문서 (삭제·NOT_KNOWLEDGE 제외, 최신순)" }),
+    })
+    .meta({ id: "ConversationDetail" });
+
 export type ConversationResponse = z.infer<typeof conversationSchema>;
 export type UploadConversationsResponse = z.infer<typeof uploadConversationsResponseSchema>;
 export type ListConversationsQuery = z.infer<typeof listConversationsQuerySchema>;
 export type ConversationListItem = z.infer<typeof conversationListItemSchema>;
 export type ListConversationsResponse = z.infer<typeof listConversationsResponseSchema>;
+export type ConversationIdParams = z.infer<typeof conversationIdParamsSchema>;
+export type ConversationDetail = z.infer<typeof conversationDetailSchema>;
