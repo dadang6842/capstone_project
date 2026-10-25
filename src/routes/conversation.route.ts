@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { z } from "zod";
 import { authenticate } from "../middlewares/authenticate.js";
 import { uploadConversationFiles } from "../middlewares/upload.js";
 import { conversationController } from "../controllers/conversation.controller.js";
@@ -92,6 +93,37 @@ router.get(
     authenticate,
     validate({ params: conversationIdParamsSchema }),
     conversationController.get,
+);
+
+registry.registerPath({
+    method: "delete",
+    path: "/conversations/{conversationId}",
+    tags: ["Conversation"],
+    summary: "대화 삭제 (CONV-04)",
+    description:
+        "대화를 소프트 삭제한다. 이 대화로 만든 문서는 지우지 않고, 문서 상세의 연결된 대화에 deleted: true로 표시된다. S3 파일은 배치로 정리한다. " +
+        "이 대화를 쓰는 문서가 생성 중(첫 초안·AI 보완·재시도)이거나, 분석에 실패해 재시도를 기다리는 중이면 409 CONVERSATION_IN_USE(details.documentIds).",
+    security: bearerAuth,
+    request: { params: conversationIdParamsSchema },
+    responses: {
+        200: {
+            description: "삭제 완료 (data: null)",
+            content: { "application/json": { schema: successResponse(z.null()) } },
+        },
+        ...errorResponses(
+            "VALIDATION_ERROR",
+            "UNAUTHORIZED",
+            "TOKEN_EXPIRED",
+            "CONVERSATION_NOT_FOUND",
+            "CONVERSATION_IN_USE",
+        ),
+    },
+});
+router.delete(
+    "/:conversationId",
+    authenticate,
+    validate({ params: conversationIdParamsSchema }),
+    conversationController.delete,
 );
 
 export default router;

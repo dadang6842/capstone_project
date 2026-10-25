@@ -16,6 +16,13 @@ export const conversationController = {
         sendSuccess(res, result);
     },
 
+    async delete(req: Request, res: Response) {
+        const { conversationId } = req.params as unknown as ConversationIdParams;
+        await conversationService.delete(req.user.userId, conversationId);
+        logger.info("대화를 삭제하였습니다.", { conversationId });
+        sendSuccess(res, null);
+    },
+
     async upload(req: Request, res: Response) {
         // upload 미들웨어가 저장할 파일이 1개 이상인지 확인했다
         const files = req.files as Express.Multer.File[];

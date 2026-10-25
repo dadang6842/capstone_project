@@ -133,6 +133,22 @@ export const conversationService = {
         };
     },
 
+    // 이 대화로 만든 문서는 지우지 않는다 (본문·프롬프트가 이미 저장돼 있어 편집·재생성도 계속 가능)
+    async delete(userId: number, conversationId: number): Promise<void> {
+        const conversation = await conversationRepository.findByIdWithBlockingDocuments(BigInt(conversationId));
+        if (!conversation || conversation.userId !== BigInt(userId) || conversation.deletedAt) {
+            throw new AppError("CONVERSATION_NOT_FOUND");
+        }
+        if (conversation.documentConversations.length > 0) {
+            throw new AppError("CONVERSATION_IN_USE", {
+                details: {
+                    documentIds: conversation.documentConversations.map(({ documentId }) => Number(documentId)),
+                },
+            });
+        }
+        await conversationRepository.softDelete(conversation.conversationId);
+    },
+
     async upload(
         userId: number,
         files: Express.Multer.File[],
