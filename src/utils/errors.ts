@@ -57,7 +57,7 @@ export const ERRORS = {
         no: 3004,
         title: "지원하지 않는 파일 형식",
         status: 415,
-        message: "PDF, MD, TXT 파일만 올릴 수 있습니다.",
+        message: "JSON 파일만 올릴 수 있습니다.",
     },
     CONVERSATION_NOT_FOUND: { no: 3006, title: "대화 없음", status: 404, message: "대화를 찾을 수 없습니다." },
     CONVERSATION_IN_USE: {
