@@ -8,6 +8,8 @@ const envSchema = z.object({
     JWT_ACCESS_SECRET: z.string().min(1),
     JWT_REFRESH_SECRET: z.string().min(1),
     LOG_DIR: z.string().default("logs"),
+    AWS_REGION: z.string().default("ap-northeast-2"),
+    S3_BUCKET: z.string().min(1),
 });
 
 export const env = envSchema.parse(process.env);
