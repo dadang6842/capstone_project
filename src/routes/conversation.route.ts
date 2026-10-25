@@ -2,7 +2,13 @@ import { Router } from "express";
 import { authenticate } from "../middlewares/authenticate.js";
 import { uploadConversationFiles } from "../middlewares/upload.js";
 import { conversationController } from "../controllers/conversation.controller.js";
-import { uploadConversationsBodySchema, uploadConversationsResponseSchema } from "../schemas/conversation.schema.js";
+import { validate } from "../middlewares/validate.js";
+import {
+    listConversationsQuerySchema,
+    listConversationsResponseSchema,
+    uploadConversationsBodySchema,
+    uploadConversationsResponseSchema,
+} from "../schemas/conversation.schema.js";
 import { successResponse } from "../schemas/common.schema.js";
 import { registry, errorResponses, bearerAuth } from "../docs/openapi.js";
 
@@ -39,5 +45,25 @@ registry.registerPath({
 });
 // 로그인 확인을 먼저 해서, 로그인하지 않은 요청은 파일을 받기 전에 끊는다
 router.post("/", authenticate, uploadConversationFiles, conversationController.upload);
+
+registry.registerPath({
+    method: "get",
+    path: "/conversations",
+    tags: ["Conversation"],
+    summary: "대화 목록 조회 (CONV-02)",
+    description:
+        "대화 목록(A03)과 문서 생성의 분석 대상 선택(A04)에 쓴다. 등록일 최신순. 대화마다 이 대화로 만든 문서의 생성 결과(generation)를 같이 준다. " +
+        "pendingDocuments는 미채택 문서 목록으로, 1개면 바로 초안 검토(A05)로, 여러 개면 펼쳐서 고른다.",
+    security: bearerAuth,
+    request: { query: listConversationsQuerySchema },
+    responses: {
+        200: {
+            description: "대화 목록",
+            content: { "application/json": { schema: successResponse(listConversationsResponseSchema) } },
+        },
+        ...errorResponses("VALIDATION_ERROR", "UNAUTHORIZED", "TOKEN_EXPIRED"),
+    },
+});
+router.get("/", authenticate, validate({ query: listConversationsQuerySchema }), conversationController.list);
 
 export default router;

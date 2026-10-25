@@ -2,8 +2,14 @@ import type { Request, Response } from "express";
 import { conversationService } from "../services/conversation.service.js";
 import { sendSuccess } from "../utils/response.js";
 import { logger } from "../utils/logger.js";
+import type { ListConversationsQuery } from "../schemas/conversation.schema.js";
 
 export const conversationController = {
+    async list(req: Request, res: Response) {
+        const result = await conversationService.list(req.user.userId, req.query as unknown as ListConversationsQuery);
+        sendSuccess(res, result);
+    },
+
     async upload(req: Request, res: Response) {
         // upload 미들웨어가 저장할 파일이 1개 이상인지 확인했다
         const files = req.files as Express.Multer.File[];

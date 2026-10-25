@@ -1,12 +1,19 @@
 import { randomUUID } from "node:crypto";
 import { rm } from "node:fs/promises";
 import type { Conversation } from "../generated/prisma/client.js";
-import { conversationRepository } from "../repositories/conversation.repository.js";
+import { conversationRepository, type ConversationWithDocuments } from "../repositories/conversation.repository.js";
 import { CONVERSATION_FILE_EXT, type FailedFile } from "../middlewares/upload.js";
 import { deleteFile, uploadFile } from "../utils/s3.js";
 import { AppError } from "../utils/appError.js";
 import { logger } from "../utils/logger.js";
-import type { ConversationResponse, UploadConversationsResponse } from "../schemas/conversation.schema.js";
+import { toPageInfo } from "../schemas/common.schema.js";
+import type {
+    ConversationListItem,
+    ConversationResponse,
+    ListConversationsQuery,
+    ListConversationsResponse,
+    UploadConversationsResponse,
+} from "../schemas/conversation.schema.js";
 
 const CONTENT_TYPE = "application/json";
 
@@ -18,6 +25,34 @@ function toConversationResponse(conversation: Conversation): ConversationRespons
         fileSize: Number(conversation.fileSize),
         createdAt: conversation.createdAt,
         refinedAt: conversation.refinedAt,
+    };
+}
+
+// 대화 목록의 generation: 이 대화로 만든 문서들의 생성 결과를 하나의 상태로 묶는다
+function toGeneration({ documentConversations }: ConversationWithDocuments): ConversationListItem["generation"] {
+    const documents = documentConversations.map(({ document }) => document);
+    const pending = documents.filter((document) => document.status !== "FINALIZED");
+    // 첫 초안 생성 중이거나, 검토 중인 문서에 AI 보완 중인 초안이 있으면 생성 중
+    const generating = documents.some(
+        (document) =>
+            document.status === "GENERATING" || document.drafts.some((draft) => draft.status === "GENERATING"),
+    );
+
+    let status: ConversationListItem["generation"]["status"] = "NONE";
+    if (generating) status = "GENERATING";
+    else if (documents.some((document) => document.status === "FAILED")) status = "FAILED";
+    else if (pending.length > 0) status = "PENDING_REVIEW";
+    else if (documents.length > 0) status = "COMPLETED";
+
+    return {
+        status,
+        pendingDocuments: pending.map((document) => ({
+            documentId: Number(document.documentId),
+            // 초안은 최신순이라 첫 번째가 최신 회차. 제목은 AI 보완 중인 회차엔 아직 없어서 제목이 있는 가장 최근 초안 것
+            title: document.drafts.find((draft) => draft.title !== null)?.title ?? null,
+            status: document.status as "GENERATING" | "DRAFT_GENERATED" | "FAILED",
+            latestDraftId: document.drafts[0] ? Number(document.drafts[0].draftId) : null,
+        })),
     };
 }
 
@@ -64,6 +99,20 @@ async function saveOne(userId: number, file: Express.Multer.File): Promise<Conve
 }
 
 export const conversationService = {
+    async list(userId: number, { page, limit }: ListConversationsQuery): Promise<ListConversationsResponse> {
+        const [conversations, totalCount] = await conversationRepository.findPageByUser(BigInt(userId), {
+            skip: (page - 1) * limit,
+            take: limit,
+        });
+        return {
+            ...toPageInfo(page, limit, totalCount),
+            conversations: conversations.map((conversation) => ({
+                ...toConversationResponse(conversation),
+                generation: toGeneration(conversation),
+            })),
+        };
+    },
+
     // 내용은 해석하지 않고 S3에 저장한 뒤 conversations에 기록만 한다 (분석은 문서를 만들 때 AI 서버가 함)
     // 파일마다 따로 저장해서, 일부가 실패해도 성공한 파일은 그대로 남긴다
     async upload(
