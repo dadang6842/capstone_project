@@ -69,6 +69,13 @@ export const conversationRepository = {
         return prisma.conversation.update({ where: { conversationId }, data: { deletedAt: new Date() } });
     },
 
+    // 삭제하지 않은 내 대화 중 아이디가 맞는 것
+    findActiveByIds(userId: bigint, conversationIds: bigint[]) {
+        return prisma.conversation.findMany({
+            where: { userId, deletedAt: null, conversationId: { in: conversationIds } },
+        });
+    },
+
     // 삭제하지 않은 내 대화를 등록일 최신순(같으면 아이디 내림차순)으로 한 페이지와 전체 개수
     findPageByUser(userId: bigint, { skip, take }: { skip: number; take: number; q?: string }) {
         const where: Prisma.ConversationWhereInput = {

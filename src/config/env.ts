@@ -10,6 +10,8 @@ const envSchema = z.object({
     LOG_DIR: z.string().default("logs"),
     AWS_REGION: z.string().default("ap-northeast-2"),
     S3_BUCKET: z.string().min(1),
+    AI_SERVER_URL: z.string().default(""),
+    INTERNAL_API_KEY: z.string().default(""),
 });
 
 export const env = envSchema.parse(process.env);
