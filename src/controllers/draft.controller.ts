@@ -17,4 +17,11 @@ export const draftController = {
         logger.info("초안 생성을 다시 요청하였습니다.", { failedDraftId: draftId, draftId: result.draftId });
         sendSuccess(res, result, 201);
     },
+
+    async accept(req: Request, res: Response) {
+        const { draftId } = req.params as unknown as DraftIdParams;
+        const result = await draftService.accept(req.user.userId, draftId);
+        logger.info("초안을 최종 채택하였습니다.", { documentId: result.documentId, draftId });
+        sendSuccess(res, result);
+    },
 };

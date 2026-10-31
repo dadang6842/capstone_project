@@ -55,6 +55,16 @@ export const retryDraftResponseSchema = z
     })
     .meta({ id: "RetryDraftResponse" });
 
+// 초안 최종 채택(DRAFT-03)
+export const acceptDraftResponseSchema = z
+    .object({
+        documentId: z.number().int().meta({ example: 15 }),
+        status: z.literal("FINALIZED"),
+        finalizedAt: z.date().meta({ description: "최종 채택 일시" }),
+    })
+    .meta({ id: "AcceptDraftResponse" });
+
 export type DraftIdParams = z.infer<typeof draftIdParamsSchema>;
 export type DraftDetail = z.infer<typeof draftDetailSchema>;
 export type RetryDraftResponse = z.infer<typeof retryDraftResponseSchema>;
+export type AcceptDraftResponse = z.infer<typeof acceptDraftResponseSchema>;

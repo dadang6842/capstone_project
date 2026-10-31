@@ -1,4 +1,5 @@
 import { prisma } from "../config/prisma.js";
+import type { Category } from "../generated/prisma/client.js";
 
 export const draftRepository = {
     // 초안 조회용: 초안, 보완 항목, 문서(+ 진행 중인 AI 보완 초안, 분석한 원본 대화)
@@ -61,6 +62,62 @@ export const draftRepository = {
             });
             if (count === 0) return null;
             return tx.draft.create({ data: { documentId, versionNo: 1 }, select: { draftId: true } });
+        });
+    },
+
+    // 채택용: 초안과 문서 상태, 진행 중인 AI 보완 초안(2회차 이상 GENERATING)
+    findForAccept(draftId: bigint) {
+        return prisma.draft.findUnique({
+            where: { draftId },
+            include: {
+                document: {
+                    select: {
+                        userId: true,
+                        status: true,
+                        deletedAt: true,
+                        drafts: {
+                            where: { versionNo: { gt: 1 }, status: "GENERATING" },
+                            select: { draftId: true },
+                            take: 1,
+                        },
+                    },
+                },
+            },
+        });
+    },
+
+    // 최종 채택: 문서에 초안 내용을 복사하고 FINALIZED, 초안 ACCEPTED, 키워드를 document_keywords로 (한 트랜잭션)
+    // 문서가 DRAFT_GENERATED일 때만 바꿔서, 두 회차를 동시에 채택해도 하나만 된다 (아니면 null)
+    accept(draft: {
+        draftId: bigint;
+        documentId: bigint;
+        title: string | null;
+        summary: string | null;
+        category: Category | null;
+        content: string | null;
+        keywords: string[];
+    }) {
+        return prisma.$transaction(async (tx) => {
+            const finalizedAt = new Date();
+            const { count } = await tx.document.updateMany({
+                where: { documentId: draft.documentId, status: "DRAFT_GENERATED" },
+                data: {
+                    title: draft.title,
+                    summary: draft.summary,
+                    category: draft.category,
+                    content: draft.content,
+                    status: "FINALIZED",
+                    finalizedAt,
+                },
+            });
+            if (count === 0) return null;
+
+            await tx.draft.update({ where: { draftId: draft.draftId }, data: { status: "ACCEPTED" } });
+            await tx.documentKeyword.createMany({
+                data: draft.keywords.map((keyword) => ({ documentId: draft.documentId, keyword })),
+                skipDuplicates: true,
+            });
+            return finalizedAt;
         });
     },
 };

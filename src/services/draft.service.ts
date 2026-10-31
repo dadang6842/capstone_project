@@ -1,7 +1,12 @@
 import { draftRepository } from "../repositories/draft.repository.js";
 import { sendAnalysisRequest } from "./document.service.js";
 import { AppError } from "../utils/appError.js";
-import type { DraftDetail, RetryDraftResponse } from "../schemas/draft.schema.js";
+import type { AcceptDraftResponse, DraftDetail, RetryDraftResponse } from "../schemas/draft.schema.js";
+
+// drafts.keywords는 JSON 컬럼이라 배열이 아니면(생성 전 null) 빈 배열
+function toKeywords(keywords: unknown): string[] {
+    return Array.isArray(keywords) ? (keywords as string[]) : [];
+}
 
 export const draftService = {
     // 프론트가 생성 상태를 폴링하는 API. 다른 회원의 초안, 삭제한 문서의 초안은 404
@@ -21,8 +26,7 @@ export const draftService = {
             title: draft.title,
             summary: draft.summary,
             category: draft.category,
-            // keywords는 JSON 컬럼이라 배열이 아니면(생성 전 null) 빈 배열
-            keywords: Array.isArray(draft.keywords) ? (draft.keywords as string[]) : [],
+            keywords: toKeywords(draft.keywords),
             content: draft.content,
             feedbacks: draft.feedbacks.map(({ reason }) => reason),
             createdAt: draft.createdAt,
@@ -67,5 +71,24 @@ export const draftService = {
         void sendAnalysisRequest(draft.documentId, created.draftId, conversations);
 
         return { draftId: Number(created.draftId), status: "GENERATING" };
+    },
+
+    // 고른 회차를 지식 문서로 확정한다. 최신 회차가 아니어도 되고, 다른 회차는 GENERATED로 그대로 둔다.
+    async accept(userId: number, draftId: number): Promise<AcceptDraftResponse> {
+        const draft = await draftRepository.findForAccept(BigInt(draftId));
+        if (!draft || draft.document.userId !== BigInt(userId) || draft.document.deletedAt) {
+            throw new AppError("DRAFT_NOT_FOUND");
+        }
+
+        // 생성이 끝난 회차만, 그리고 아직 채택 전인 문서만 (이미 다른 회차를 채택했으면 409)
+        if (draft.status !== "GENERATED" || draft.document.status !== "DRAFT_GENERATED") {
+            throw new AppError("INVALID_DRAFT_STATUS");
+        }
+        if (draft.document.drafts.length > 0) throw new AppError("REVISION_IN_PROGRESS");
+
+        const finalizedAt = await draftRepository.accept({ ...draft, keywords: toKeywords(draft.keywords) });
+        if (!finalizedAt) throw new AppError("INVALID_DRAFT_STATUS");
+
+        return { documentId: Number(draft.documentId), status: "FINALIZED", finalizedAt };
     },
 };
