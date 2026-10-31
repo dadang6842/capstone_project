@@ -5,7 +5,7 @@ import { requestAnalysis } from "../utils/aiServer.js";
 import { getViewUrl } from "../utils/s3.js";
 import { AppError } from "../utils/appError.js";
 import { logger } from "../utils/logger.js";
-import type { CreateDocumentBody, CreateDocumentResponse } from "../schemas/document.schema.js";
+import type { CreateDocumentBody, CreateDocumentResponse, DraftHistoryResponse } from "../schemas/document.schema.js";
 
 // AI-01: 고른 대화의 원본 Presigned URL을 AI 서버로 보낸다. 문서 생성 요청(DRAFT-01)과 첫 초안 재시도(DRAFT-05)에서 쓴다.
 // 보내지 못하면(주소 미설정, 연결 실패, 에러 응답) 첫 초안을 실패로 바꿔서 사용자가 '다시 시도'(DRAFT-05)할 수 있게 한다.
@@ -36,7 +36,7 @@ export async function sendAnalysisRequest(documentId: bigint, draftId: bigint, c
 
 export const documentService = {
     // 문서와 1회차 초안을 GENERATING으로 만들고 바로 응답한다. AI 서버 요청은 응답과 상관없이 뒤에서 보낸다(비동기).
-    // 이후 AI 서버가 프롬프트를 돌려주면(AI-02) GPT로 초안을 채운다. 프론트는 draftId로 초안 조회(DRAFT-02)를 폴링한다.
+    // 이후 AI 서버가 결과를 돌려주면(AI-02) 초안을 채운다. 프론트는 draftId로 초안 조회(DRAFT-02)를 폴링한다.
     async create(userId: number, { conversationIds }: CreateDocumentBody): Promise<CreateDocumentResponse> {
         const ids = conversationIds.map(BigInt);
 
@@ -64,5 +64,26 @@ export const documentService = {
         void sendAnalysisRequest(document.documentId, draftId, conversations);
 
         return { documentId: Number(document.documentId), draftId: Number(draftId), status: "GENERATING" };
+    },
+
+    // 한 문서의 초안 회차 목록 (본문 제외). 초안 검토 화면의 회차 선택에 쓴다. 다른 회원·삭제한 문서는 404
+    async listDrafts(userId: number, documentId: number): Promise<DraftHistoryResponse> {
+        const document = await documentRepository.findWithDraftHistory(BigInt(documentId));
+        if (!document || document.userId !== BigInt(userId) || document.deletedAt) {
+            throw new AppError("DOCUMENT_NOT_FOUND");
+        }
+
+        return {
+            // AI 보완 중 = 2회차 이상이 생성 중 (초안 조회의 revising과 같은 기준)
+            revising: document.drafts.some((draft) => draft.versionNo > 1 && draft.status === "GENERATING"),
+            drafts: document.drafts.map((draft) => ({
+                draftId: Number(draft.draftId),
+                versionNo: draft.versionNo,
+                status: draft.status,
+                title: draft.title,
+                feedbacks: draft.feedbacks.map(({ reason }) => reason),
+                createdAt: draft.createdAt,
+            })),
+        };
     },
 };

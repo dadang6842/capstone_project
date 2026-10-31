@@ -28,6 +28,28 @@ export const documentRepository = {
         });
     },
 
+    // 초안 이력 조회용: 문서와 모든 회차(본문 제외), 보완 항목
+    findWithDraftHistory(documentId: bigint) {
+        return prisma.document.findUnique({
+            where: { documentId },
+            select: {
+                userId: true,
+                deletedAt: true,
+                drafts: {
+                    orderBy: [{ versionNo: "asc" }, { draftId: "asc" }],
+                    select: {
+                        draftId: true,
+                        versionNo: true,
+                        status: true,
+                        title: true,
+                        createdAt: true,
+                        feedbacks: { select: { reason: true } },
+                    },
+                },
+            },
+        });
+    },
+
     // 첫 초안 생성 실패: 초안 FAILED(원인 기록) + 문서 FAILED
     markFirstDraftFailed(documentId: bigint, draftId: bigint, failReason: "ANALYSIS_FAILED", errorMessage: string) {
         return prisma.$transaction([
