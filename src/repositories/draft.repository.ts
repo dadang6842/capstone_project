@@ -65,8 +65,8 @@ export const draftRepository = {
         });
     },
 
-    // 채택용: 초안과 문서 상태, 진행 중인 AI 보완 초안(2회차 이상 GENERATING)
-    findForAccept(draftId: bigint) {
+    // 채택·직접 수정용: 초안과 문서 상태, 진행 중인 AI 보완 초안(2회차 이상 GENERATING)
+    findWithDocumentState(draftId: bigint) {
         return prisma.draft.findUnique({
             where: { draftId },
             include: {
@@ -119,5 +119,11 @@ export const draftRepository = {
             });
             return finalizedAt;
         });
+    },
+
+    // 직접 수정: 받은 제목·본문만 덮어쓴다(AI 원본은 보관하지 않음). 그 사이 상태가 바뀌었으면 0건
+    async updateContent(draftId: bigint, data: { title?: string; content?: string }) {
+        const { count } = await prisma.draft.updateMany({ where: { draftId, status: "GENERATED" }, data });
+        return count > 0;
     },
 };

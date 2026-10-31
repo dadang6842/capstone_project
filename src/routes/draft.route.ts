@@ -7,6 +7,8 @@ import {
     draftDetailSchema,
     draftIdParamsSchema,
     retryDraftResponseSchema,
+    updateDraftBodySchema,
+    updateDraftResponseSchema,
 } from "../schemas/draft.schema.js";
 import { successResponse } from "../schemas/common.schema.js";
 import { registry, errorResponses, bearerAuth } from "../docs/openapi.js";
@@ -70,7 +72,7 @@ registry.registerPath({
     description:
         "고른 회차를 지식 문서로 확정한다. 최신 회차가 아니어도 된다. 초안의 제목·요약·지식 유형·본문을 문서로, 키워드를 문서 키워드로 복사하고 " +
         "문서를 FINALIZED로 바꾼다. 다른 회차는 그대로 둔다. 생성 완료(GENERATED) 회차만 가능하고, 이미 채택한 문서면 409 INVALID_DRAFT_STATUS, " +
-        "AI 보완이 진행 중이면 409 REVISION_IN_PROGRESS.",
+        "AI 보완이 진행 중이면 409 REVISION_IN_PROGRESS. 성공하면 프론트는 지식 문서 상세로 이동한다.",
     security: bearerAuth,
     request: { params: draftIdParamsSchema },
     responses: {
@@ -89,5 +91,41 @@ registry.registerPath({
     },
 });
 router.post("/:draftId/accept", authenticate, validate({ params: draftIdParamsSchema }), draftController.accept);
+
+registry.registerPath({
+    method: "patch",
+    path: "/drafts/{draftId}",
+    tags: ["Draft"],
+    summary: "초안 제목·본문 직접 수정 (DRAFT-07)",
+    description:
+        "선택한 회차(GENERATED)의 제목·본문을 덮어쓴다. AI 원본은 따로 보관하지 않고 새 회차도 만들지 않는다. 보낸 필드만 바꾸며 둘 중 하나는 보내야 하고, 보낸 값이 공백만 있으면 400. " +
+        "생성 완료 전·실패한 회차, 이미 채택한 문서면 409 INVALID_DRAFT_STATUS, AI 보완이 진행 중이면 409 REVISION_IN_PROGRESS. " +
+        "저장한 내용은 이후 최종 채택과 AI 보완 요청의 기준이 된다.",
+    security: bearerAuth,
+    request: {
+        params: draftIdParamsSchema,
+        body: { required: true, content: { "application/json": { schema: updateDraftBodySchema } } },
+    },
+    responses: {
+        200: {
+            description: "저장 완료",
+            content: { "application/json": { schema: successResponse(updateDraftResponseSchema) } },
+        },
+        ...errorResponses(
+            "VALIDATION_ERROR",
+            "UNAUTHORIZED",
+            "TOKEN_EXPIRED",
+            "DRAFT_NOT_FOUND",
+            "INVALID_DRAFT_STATUS",
+            "REVISION_IN_PROGRESS",
+        ),
+    },
+});
+router.patch(
+    "/:draftId",
+    authenticate,
+    validate({ params: draftIdParamsSchema, body: updateDraftBodySchema }),
+    draftController.update,
+);
 
 export default router;

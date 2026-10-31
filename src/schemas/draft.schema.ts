@@ -64,7 +64,35 @@ export const acceptDraftResponseSchema = z
     })
     .meta({ id: "AcceptDraftResponse" });
 
+// 초안 제목·본문 직접 수정(DRAFT-07). 보낸 필드만 바꾼다 (둘 중 하나 이상 필수)
+export const updateDraftBodySchema = z
+    .object({
+        title: z
+            .string()
+            .trim()
+            .min(1, "제목을 입력해 주세요.")
+            .max(255)
+            .optional()
+            .meta({ example: "Prisma로 ERD 옮기며 정한 규칙", description: "제목 (선택, 보내면 1~255자)" }),
+        content: z
+            .string()
+            .refine((value) => value.trim().length > 0, "본문을 입력해 주세요.")
+            .optional()
+            .meta({
+                example: "# Prisma로 ERD 옮기기\n\n...",
+                description: "본문 Markdown (선택, 보내면 공백만 있는 값 불가)",
+            }),
+    })
+    .refine((body) => body.title !== undefined || body.content !== undefined, "제목이나 본문 중 하나는 보내야 합니다.")
+    .meta({ id: "UpdateDraftRequest" });
+
+export const updateDraftResponseSchema = z
+    .object({ draftId: z.number().int().meta({ example: 31 }) })
+    .meta({ id: "UpdateDraftResponse" });
+
 export type DraftIdParams = z.infer<typeof draftIdParamsSchema>;
 export type DraftDetail = z.infer<typeof draftDetailSchema>;
 export type RetryDraftResponse = z.infer<typeof retryDraftResponseSchema>;
 export type AcceptDraftResponse = z.infer<typeof acceptDraftResponseSchema>;
+export type UpdateDraftBody = z.infer<typeof updateDraftBodySchema>;
+export type UpdateDraftResponse = z.infer<typeof updateDraftResponseSchema>;

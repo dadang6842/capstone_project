@@ -1,11 +1,31 @@
 import { draftRepository } from "../repositories/draft.repository.js";
 import { sendAnalysisRequest } from "./document.service.js";
 import { AppError } from "../utils/appError.js";
-import type { AcceptDraftResponse, DraftDetail, RetryDraftResponse } from "../schemas/draft.schema.js";
+import type {
+    AcceptDraftResponse,
+    DraftDetail,
+    RetryDraftResponse,
+    UpdateDraftBody,
+    UpdateDraftResponse,
+} from "../schemas/draft.schema.js";
 
 // drafts.keywords는 JSON 컬럼이라 배열이 아니면(생성 전 null) 빈 배열
 function toKeywords(keywords: unknown): string[] {
     return Array.isArray(keywords) ? (keywords as string[]) : [];
+}
+
+// 채택·직접 수정할 수 있는 초안을 찾는다: 생성이 끝난 회차(GENERATED)이고, 문서가 아직 채택 전(DRAFT_GENERATED)이며
+// AI 보완이 진행 중이 아니어야 한다
+async function findEditableDraft(userId: number, draftId: number) {
+    const draft = await draftRepository.findWithDocumentState(BigInt(draftId));
+    if (!draft || draft.document.userId !== BigInt(userId) || draft.document.deletedAt) {
+        throw new AppError("DRAFT_NOT_FOUND");
+    }
+    if (draft.status !== "GENERATED" || draft.document.status !== "DRAFT_GENERATED") {
+        throw new AppError("INVALID_DRAFT_STATUS");
+    }
+    if (draft.document.drafts.length > 0) throw new AppError("REVISION_IN_PROGRESS");
+    return draft;
 }
 
 export const draftService = {
@@ -75,20 +95,17 @@ export const draftService = {
 
     // 고른 회차를 지식 문서로 확정한다. 최신 회차가 아니어도 되고, 다른 회차는 GENERATED로 그대로 둔다.
     async accept(userId: number, draftId: number): Promise<AcceptDraftResponse> {
-        const draft = await draftRepository.findForAccept(BigInt(draftId));
-        if (!draft || draft.document.userId !== BigInt(userId) || draft.document.deletedAt) {
-            throw new AppError("DRAFT_NOT_FOUND");
-        }
-
-        // 생성이 끝난 회차만, 그리고 아직 채택 전인 문서만 (이미 다른 회차를 채택했으면 409)
-        if (draft.status !== "GENERATED" || draft.document.status !== "DRAFT_GENERATED") {
-            throw new AppError("INVALID_DRAFT_STATUS");
-        }
-        if (draft.document.drafts.length > 0) throw new AppError("REVISION_IN_PROGRESS");
-
+        const draft = await findEditableDraft(userId, draftId);
         const finalizedAt = await draftRepository.accept({ ...draft, keywords: toKeywords(draft.keywords) });
         if (!finalizedAt) throw new AppError("INVALID_DRAFT_STATUS");
 
         return { documentId: Number(draft.documentId), status: "FINALIZED", finalizedAt };
+    },
+
+    // 선택한 회차의 제목·본문을 덮어쓴다. 새 회차를 만들지 않고, 이후 채택·AI 보완의 기준이 된다.
+    async update(userId: number, draftId: number, body: UpdateDraftBody): Promise<UpdateDraftResponse> {
+        const draft = await findEditableDraft(userId, draftId);
+        if (!(await draftRepository.updateContent(draft.draftId, body))) throw new AppError("INVALID_DRAFT_STATUS");
+        return { draftId };
     },
 };
