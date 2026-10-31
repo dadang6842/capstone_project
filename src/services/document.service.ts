@@ -7,10 +7,9 @@ import { AppError } from "../utils/appError.js";
 import { logger } from "../utils/logger.js";
 import type { CreateDocumentBody, CreateDocumentResponse } from "../schemas/document.schema.js";
 
-// AI-01: 고른 대화의 원본 Presigned URL을 AI 서버로 보낸다.
+// AI-01: 고른 대화의 원본 Presigned URL을 AI 서버로 보낸다. 문서 생성 요청(DRAFT-01)과 첫 초안 재시도(DRAFT-05)에서 쓴다.
 // 보내지 못하면(주소 미설정, 연결 실패, 에러 응답) 첫 초안을 실패로 바꿔서 사용자가 '다시 시도'(DRAFT-05)할 수 있게 한다.
-// prompt가 NULL인 채로 실패하므로 재시도는 AI-01부터 다시 보낸다.
-async function sendAnalysisRequest(documentId: bigint, draftId: bigint, conversations: Conversation[]) {
+export async function sendAnalysisRequest(documentId: bigint, draftId: bigint, conversations: Conversation[]) {
     try {
         await requestAnalysis(
             Number(documentId),

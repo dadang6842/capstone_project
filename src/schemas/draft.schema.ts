@@ -41,5 +41,20 @@ export const draftDetailSchema = z
     })
     .meta({ id: "DraftDetail" });
 
+// 초안 생성 재시도(DRAFT-05)
+export const retryDraftResponseSchema = z
+    .object({
+        draftId: z
+            .number()
+            .int()
+            .meta({
+                example: 33,
+                description: "재시도로 새로 만든 초안 아이디. 이 아이디로 초안 조회(DRAFT-02)를 폴링한다",
+            }),
+        status: z.literal("GENERATING"),
+    })
+    .meta({ id: "RetryDraftResponse" });
+
 export type DraftIdParams = z.infer<typeof draftIdParamsSchema>;
 export type DraftDetail = z.infer<typeof draftDetailSchema>;
+export type RetryDraftResponse = z.infer<typeof retryDraftResponseSchema>;
