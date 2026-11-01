@@ -5,7 +5,12 @@ import { requestAnalysis } from "../utils/aiServer.js";
 import { getViewUrl } from "../utils/s3.js";
 import { AppError } from "../utils/appError.js";
 import { logger } from "../utils/logger.js";
-import type { CreateDocumentBody, CreateDocumentResponse, DraftHistoryResponse } from "../schemas/document.schema.js";
+import type {
+    CreateDocumentBody,
+    CreateDocumentResponse,
+    DraftHistoryResponse,
+    PendingDocumentsResponse,
+} from "../schemas/document.schema.js";
 
 // AI-01: 고른 대화의 원본 Presigned URL을 AI 서버로 보낸다. 문서 생성 요청(DRAFT-01)과 첫 초안 재시도(DRAFT-05)에서 쓴다.
 // 보내지 못하면(주소 미설정, 연결 실패, 에러 응답) 첫 초안을 실패로 바꿔서 사용자가 '다시 시도'(DRAFT-05)할 수 있게 한다.
@@ -83,6 +88,20 @@ export const documentService = {
                 title: draft.title,
                 feedbacks: draft.feedbacks.map(({ reason }) => reason),
                 createdAt: draft.createdAt,
+            })),
+        };
+    },
+
+    // 검토할 초안이 있는 문서 목록. 원문 대화의 삭제 여부와 관계없이 보여 준다(삭제한 문서만 뺌)
+    // 첫 초안 생성 중·실패 문서는 볼 초안이 없어서 빼고, 진행 확인·재시도는 대화 목록에서 한다
+    async listPending(userId: number): Promise<PendingDocumentsResponse> {
+        const documents = await documentRepository.findPendingByUser(BigInt(userId));
+        return {
+            // DRAFT_GENERATED 문서에는 생성이 끝난 회차가 항상 하나 이상 있다
+            documents: documents.map(({ documentId, createdAt, drafts: [latest] }) => ({
+                documentId: Number(documentId),
+                title: latest.title,
+                createdAt,
             })),
         };
     },

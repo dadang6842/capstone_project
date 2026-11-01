@@ -60,7 +60,27 @@ export const draftHistoryResponseSchema = z
     })
     .meta({ id: "DraftHistory" });
 
+// 미채택 문서 목록(DRAFT-08). 초안 검토 화면의 '초안 문서 선택'에 쓴다. 검토할 초안이 있는 문서만.
+// 보여 줄 회차·보완 중인 회차는 문서를 고른 뒤 초안 이력(DRAFT-06)으로
+export const pendingDocumentsResponseSchema = z
+    .object({
+        documents: z
+            .array(
+                z.object({
+                    documentId: z.number().int().meta({ example: 15 }),
+                    title: z
+                        .string()
+                        .nullable()
+                        .meta({ example: "Prisma로 ERD 옮기기", description: "생성이 끝난 최신 회차의 제목" }),
+                    createdAt: z.date(),
+                }),
+            )
+            .meta({ description: "검토 중(DRAFT_GENERATED)인 문서 (최근 생성순)" }),
+    })
+    .meta({ id: "PendingDocuments" });
+
 export type CreateDocumentBody = z.infer<typeof createDocumentBodySchema>;
 export type CreateDocumentResponse = z.infer<typeof createDocumentResponseSchema>;
 export type DocumentIdParams = z.infer<typeof documentIdParamsSchema>;
 export type DraftHistoryResponse = z.infer<typeof draftHistoryResponseSchema>;
+export type PendingDocumentsResponse = z.infer<typeof pendingDocumentsResponseSchema>;

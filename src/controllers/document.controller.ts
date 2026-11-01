@@ -16,4 +16,9 @@ export const documentController = {
         const result = await documentService.listDrafts(req.user.userId, documentId);
         sendSuccess(res, result);
     },
+
+    async listPending(req: Request, res: Response) {
+        const result = await documentService.listPending(req.user.userId);
+        sendSuccess(res, result);
+    },
 };
