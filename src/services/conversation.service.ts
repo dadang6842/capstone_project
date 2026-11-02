@@ -47,13 +47,21 @@ function toGeneration({ documentConversations }: ConversationWithDocuments): Con
 
     return {
         status,
-        pendingDocuments: pending.map((document) => ({
-            documentId: Number(document.documentId),
-            // 초안은 최신순이라 첫 번째가 최신 회차. 제목은 AI 보완 중인 회차엔 아직 없어서 제목이 있는 가장 최근 초안 것
-            title: document.drafts.find((draft) => draft.title !== null)?.title ?? null,
-            status: document.status as "GENERATING" | "DRAFT_GENERATED" | "FAILED",
-            latestDraftId: document.drafts[0] ? Number(document.drafts[0].draftId) : null,
-        })),
+        pendingDocuments: pending.map((document) => {
+            // 버튼이 이동할 초안 (초안은 최신순)
+            //  - 검토 중: 생성이 끝난 최신 회차 (AI 보완 중인 회차는 아직 내용이 없어서 건너뜀) → A05에서 이 회차를 미리 선택
+            //  - 첫 초안 생성 중·실패: 가장 최근 시도 → A04 진행 확인(폴링)·다시 시도
+            const target =
+                document.status === "DRAFT_GENERATED"
+                    ? document.drafts.find((draft) => draft.status === "GENERATED")
+                    : document.drafts[0];
+            return {
+                documentId: Number(document.documentId),
+                title: target?.title ?? null,
+                status: document.status as "GENERATING" | "DRAFT_GENERATED" | "FAILED",
+                latestDraftId: target ? Number(target.draftId) : null,
+            };
+        }),
     };
 }
 

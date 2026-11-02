@@ -66,7 +66,7 @@ registry.registerPath({
     method: "get",
     path: "/documents/{documentId}/drafts",
     tags: ["Document"],
-    summary: "문서의 초안 이력 조회 (DRAFT-06)",
+    summary: "문서의 초안 회차 조회 (DRAFT-06)",
     description:
         "초안 검토 화면의 회차 선택(A05-2)에 쓴다. 생성이 끝난 회차의 아이디·번호만 준다. latestDraftId는 처음 보여 줄 회차, " +
         "revision은 마지막 AI 보완이 생성 중(GENERATING, 버튼을 막고 DRAFT-02로 폴링)이거나 실패(FAILED, 실패 안내와 다시 시도)일 때만 주고 아니면 null. " +
