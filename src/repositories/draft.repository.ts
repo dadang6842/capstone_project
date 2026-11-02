@@ -1,5 +1,7 @@
 import { prisma } from "../config/prisma.js";
-import type { Category } from "../generated/prisma/client.js";
+import type { Category, FeedbackReason } from "../generated/prisma/client.js";
+
+const ERROR_MESSAGE_MAX = 1000;
 
 export const draftRepository = {
     // 초안 조회용: 초안, 보완 항목, 문서(+ 진행 중인 AI 보완 초안, 분석한 원본 대화)
@@ -62,6 +64,57 @@ export const draftRepository = {
             });
             if (count === 0) return null;
             return tx.draft.create({ data: { documentId, versionNo: 1 }, select: { draftId: true } });
+        });
+    },
+
+    // 문서의 남아 있는 원본 대화 (삭제한 대화 제외). AI 보완 요청에 보낸다
+    async findLiveConversations(documentId: bigint) {
+        const sources = await prisma.documentConversation.findMany({
+            where: { documentId, conversation: { deletedAt: null } },
+            orderBy: { conversationId: "asc" },
+            select: { conversation: true },
+        });
+        return sources.map(({ conversation }) => conversation);
+    },
+
+    // AI 보완 요청: 기준 회차를 부모로 새 회차(GENERATING)와 보완 항목을 만든다. 기준 회차는 그대로 둔다.
+    // 문서 행을 잠근 뒤 진행 중인 보완이 없는지 다시 확인해서, 버튼을 두 번 눌러도 새 회차는 하나만 생긴다 (아니면 null).
+    // 새 회차 번호 = 생성이 끝난 회차 중 가장 큰 번호 + 1 (보완이 실패했던 번호는 다시 쓴다)
+    createRevision(documentId: bigint, parentDraftId: bigint, reasons: FeedbackReason[]) {
+        return prisma.$transaction(async (tx) => {
+            await tx.$queryRaw`SELECT document_id FROM documents WHERE document_id = ${documentId} FOR UPDATE`;
+
+            const document = await tx.document.findUnique({ where: { documentId }, select: { status: true } });
+            const revising = await tx.draft.count({
+                where: { documentId, versionNo: { gt: 1 }, status: "GENERATING" },
+            });
+            if (document?.status !== "DRAFT_GENERATED" || revising > 0) return null;
+
+            const { _max } = await tx.draft.aggregate({
+                where: { documentId, status: { in: ["GENERATED", "ACCEPTED"] } },
+                _max: { versionNo: true },
+            });
+            return tx.draft.create({
+                data: {
+                    documentId,
+                    parentDraftId,
+                    versionNo: (_max.versionNo ?? 1) + 1,
+                    feedbacks: { create: reasons.map((reason) => ({ reason })) },
+                },
+                select: { draftId: true, versionNo: true },
+            });
+        });
+    },
+
+    // AI 서버에 보완 요청을 보내지 못했을 때: 새 회차만 FAILED로 (문서는 DRAFT_GENERATED 그대로, 기존 회차 유지)
+    markRevisionFailed(draftId: bigint, errorMessage: string) {
+        return prisma.draft.update({
+            where: { draftId },
+            data: {
+                status: "FAILED",
+                failReason: "REVISION_FAILED",
+                errorMessage: errorMessage.slice(0, ERROR_MESSAGE_MAX),
+            },
         });
     },
 

@@ -4,6 +4,8 @@ import { validate } from "../middlewares/validate.js";
 import { draftController } from "../controllers/draft.controller.js";
 import {
     acceptDraftResponseSchema,
+    createRevisionBodySchema,
+    createRevisionResponseSchema,
     draftDetailSchema,
     draftIdParamsSchema,
     retryDraftResponseSchema,
@@ -63,6 +65,43 @@ registry.registerPath({
     },
 });
 router.post("/:draftId/retry", authenticate, validate({ params: draftIdParamsSchema }), draftController.retry);
+
+registry.registerPath({
+    method: "post",
+    path: "/drafts/{draftId}/revisions",
+    tags: ["Draft"],
+    summary: "AI 보완 요청 (DRAFT-04)",
+    description:
+        "화면: A05 → P04 '보완 요청'. 보고 있는 회차를 기준으로 새 회차를 GENERATING으로 만들고 바로 응답한다(AI 서버 요청은 뒤에서). " +
+        "프론트는 응답의 draftId로 DRAFT-02를 폴링한다. " +
+        "TOO_LONG = 분량 줄이기, MISSING_CONTENT = 누락 내용 보완(원문이 모두 삭제됐으면 409 SOURCES_DELETED).",
+    security: bearerAuth,
+    request: {
+        params: draftIdParamsSchema,
+        body: { required: true, content: { "application/json": { schema: createRevisionBodySchema } } },
+    },
+    responses: {
+        201: {
+            description: "보완 요청 접수 (새 회차 생성 중)",
+            content: { "application/json": { schema: successResponse(createRevisionResponseSchema) } },
+        },
+        ...errorResponses(
+            "VALIDATION_ERROR",
+            "UNAUTHORIZED",
+            "TOKEN_EXPIRED",
+            "DRAFT_NOT_FOUND",
+            "INVALID_DRAFT_STATUS",
+            "REVISION_IN_PROGRESS",
+            "SOURCES_DELETED",
+        ),
+    },
+});
+router.post(
+    "/:draftId/revisions",
+    authenticate,
+    validate({ params: draftIdParamsSchema, body: createRevisionBodySchema }),
+    draftController.requestRevision,
+);
 
 registry.registerPath({
     method: "post",

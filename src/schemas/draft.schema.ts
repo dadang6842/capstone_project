@@ -55,6 +55,35 @@ export const retryDraftResponseSchema = z
     })
     .meta({ id: "RetryDraftResponse" });
 
+// AI 보완 요청(DRAFT-04). 설계서 P04의 보완 항목: TOO_LONG = 분량 줄이기, MISSING_CONTENT = 누락 내용 보완
+export const createRevisionBodySchema = z
+    .object({
+        reasons: z
+            .array(z.enum(["TOO_LONG", "MISSING_CONTENT"]))
+            .min(1, "보완 항목을 하나 이상 골라 주세요.")
+            .refine((reasons) => new Set(reasons).size === reasons.length, "같은 보완 항목을 두 번 보낼 수 없습니다.")
+            .meta({
+                example: ["TOO_LONG", "MISSING_CONTENT"],
+                description:
+                    "보완 항목 (1개 이상, 중복 불가). TOO_LONG = 분량 줄이기, MISSING_CONTENT = 누락 내용 보완",
+            }),
+    })
+    .meta({ id: "CreateRevisionRequest" });
+
+export const createRevisionResponseSchema = z
+    .object({
+        draftId: z
+            .number()
+            .int()
+            .meta({ example: 33, description: "새 회차 초안 아이디. 이 아이디로 초안 조회(DRAFT-02)를 폴링한다" }),
+        versionNo: z
+            .number()
+            .int()
+            .meta({ example: 3, description: "새 회차 번호 (A05-2의 'N회차 초안을 만들고 있습니다')" }),
+        status: z.literal("GENERATING"),
+    })
+    .meta({ id: "CreateRevisionResponse" });
+
 // 초안 최종 채택(DRAFT-03)
 export const acceptDraftResponseSchema = z
     .object({
@@ -94,5 +123,7 @@ export type DraftIdParams = z.infer<typeof draftIdParamsSchema>;
 export type DraftDetail = z.infer<typeof draftDetailSchema>;
 export type RetryDraftResponse = z.infer<typeof retryDraftResponseSchema>;
 export type AcceptDraftResponse = z.infer<typeof acceptDraftResponseSchema>;
+export type CreateRevisionBody = z.infer<typeof createRevisionBodySchema>;
+export type CreateRevisionResponse = z.infer<typeof createRevisionResponseSchema>;
 export type UpdateDraftBody = z.infer<typeof updateDraftBodySchema>;
 export type UpdateDraftResponse = z.infer<typeof updateDraftResponseSchema>;
