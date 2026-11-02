@@ -52,13 +52,20 @@ export const conversationListItemSchema = conversationSchema
                 .array(
                     z.object({
                         documentId: z.number().int().meta({ example: 15 }),
-                        title: z.string().nullable().meta({ description: "최신 회차 초안 제목 (생성 전이면 null)" }),
+                        title: z
+                            .string()
+                            .nullable()
+                            .meta({ description: "latestDraftId 초안의 제목 (생성 중·실패면 null)" }),
                         status: z.enum(["GENERATING", "DRAFT_GENERATED", "FAILED"]),
                         latestDraftId: z
                             .number()
                             .int()
                             .nullable()
-                            .meta({ example: 31, description: "최신 회차 초안 아이디" }),
+                            .meta({
+                                example: 31,
+                                description:
+                                    "버튼이 이동할 초안. 검토 중이면 생성이 끝난 최신 회차(A05에서 미리 선택, AI 보완 중인 회차 제외), 생성 중·실패면 가장 최근 시도(A04 진행 확인·다시 시도)",
+                            }),
                     }),
                 )
                 .meta({ description: "미채택 문서 목록 (FINALIZED가 아닌 문서)" }),
