@@ -2,7 +2,7 @@ import type { Request, Response } from "express";
 import { draftService } from "../services/draft.service.js";
 import { sendSuccess } from "../utils/response.js";
 import { logger } from "../utils/logger.js";
-import type { DraftIdParams, UpdateDraftBody } from "../schemas/draft.schema.js";
+import type { CreateRevisionBody, DraftIdParams, UpdateDraftBody } from "../schemas/draft.schema.js";
 
 export const draftController = {
     async get(req: Request, res: Response) {
@@ -15,6 +15,17 @@ export const draftController = {
         const { draftId } = req.params as unknown as DraftIdParams;
         const result = await draftService.retry(req.user.userId, draftId);
         logger.info("초안 생성을 다시 요청하였습니다.", { failedDraftId: draftId, draftId: result.draftId });
+        sendSuccess(res, result, 201);
+    },
+
+    async requestRevision(req: Request, res: Response) {
+        const { draftId } = req.params as unknown as DraftIdParams;
+        const result = await draftService.requestRevision(req.user.userId, draftId, req.body as CreateRevisionBody);
+        logger.info("AI 보완을 요청하였습니다.", {
+            baseDraftId: draftId,
+            draftId: result.draftId,
+            versionNo: result.versionNo,
+        });
         sendSuccess(res, result, 201);
     },
 
