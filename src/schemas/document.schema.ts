@@ -26,37 +26,48 @@ export const documentIdParamsSchema = z.object({
     documentId: z.coerce.number().int().positive().meta({ description: "문서 아이디" }),
 });
 
-// 문서의 초안 이력 조회(DRAFT-06). 본문은 빼고 회차 선택·상태 표시에 필요한 것만
+// 문서의 초안 이력 조회(DRAFT-06). 초안 검토 화면의 회차 선택용이라 생성이 끝난 회차의 아이디·번호만
 export const draftHistoryResponseSchema = z
     .object({
-        revising: z.boolean().meta({ description: "진행 중인 AI 보완 작업이 있는지" }),
+        latestDraftId: z
+            .number()
+            .int()
+            .nullable()
+            .meta({
+                example: 31,
+                description:
+                    "처음 보여 줄 초안. 채택한 회차, 없으면 생성이 끝난 최신 회차 (AI 보완 중인 회차 제외). 볼 초안이 없으면 null",
+            }),
+        revision: z
+            .object({
+                draftId: z
+                    .number()
+                    .int()
+                    .meta({
+                        example: 33,
+                        description: "AI 보완 초안. 회차·보완 항목은 이 아이디로 초안 조회(DRAFT-02)",
+                    }),
+                status: z
+                    .enum(["GENERATING", "FAILED"])
+                    .meta({
+                        description:
+                            "GENERATING이면 보완 중(버튼을 막고 폴링), FAILED면 보완 실패(실패 안내와 다시 시도)",
+                    }),
+            })
+            .nullable()
+            .meta({
+                description: "마지막 AI 보완이 진행 중이거나 실패했을 때만. 보완 완료·보완 전·채택한 문서는 null",
+            }),
         drafts: z
             .array(
                 z.object({
                     draftId: z.number().int().meta({ example: 31 }),
-                    versionNo: z
-                        .number()
-                        .int()
-                        .meta({
-                            example: 1,
-                            description:
-                                "초안 회차. 재시도한 회차는 같은 번호로 FAILED 행과 성공한 행이 함께 있을 수 있다",
-                        }),
-                    status: z.enum(["GENERATING", "GENERATED", "ACCEPTED", "FAILED", "NOT_KNOWLEDGE"]),
-                    title: z
-                        .string()
-                        .nullable()
-                        .meta({ example: "Prisma로 ERD 옮기기", description: "생성 완료 전에는 null" }),
-                    feedbacks: z
-                        .array(z.string())
-                        .meta({
-                            example: [],
-                            description: "이 회차를 만들 때 요청한 보완 항목 코드 (1회차는 빈 배열)",
-                        }),
-                    createdAt: z.date(),
+                    versionNo: z.number().int().meta({ example: 1, description: "초안 회차" }),
                 }),
             )
-            .meta({ description: "초안 목록 (회차 오름차순, 같은 회차는 시도 순)" }),
+            .meta({
+                description: "생성이 끝난(GENERATED·ACCEPTED) 회차 목록, 회차 오름차순. 생성 중·실패한 초안은 빠진다",
+            }),
     })
     .meta({ id: "DraftHistory" });
 

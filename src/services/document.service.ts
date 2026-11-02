@@ -78,17 +78,29 @@ export const documentService = {
             throw new AppError("DOCUMENT_NOT_FOUND");
         }
 
+        // 초안은 오름차순이라 뒤집어서 최신부터 찾는다
+        const latestFirst = [...document.drafts].reverse();
+        const shown =
+            latestFirst.find((draft) => draft.status === "ACCEPTED") ??
+            latestFirst.find((draft) => draft.status === "GENERATED");
+        // 가장 최근 초안이 AI 보완(2회차 이상)이고 생성 중·실패면 보완 상태로 알려 준다. 채택한 문서는 검토가 끝나서 뺀다
+        // (다음 회차는 이전 회차가 완성돼야 생기므로 회차·시도 순으로 마지막 초안이 가장 최근 초안)
+        const newest = latestFirst[0];
+        const revision =
+            document.status !== "FINALIZED" &&
+            newest &&
+            newest.versionNo > 1 &&
+            (newest.status === "GENERATING" || newest.status === "FAILED")
+                ? { draftId: Number(newest.draftId), status: newest.status }
+                : null;
+
         return {
-            // AI 보완 중 = 2회차 이상이 생성 중 (초안 조회의 revising과 같은 기준)
-            revising: document.drafts.some((draft) => draft.versionNo > 1 && draft.status === "GENERATING"),
-            drafts: document.drafts.map((draft) => ({
-                draftId: Number(draft.draftId),
-                versionNo: draft.versionNo,
-                status: draft.status,
-                title: draft.title,
-                feedbacks: draft.feedbacks.map(({ reason }) => reason),
-                createdAt: draft.createdAt,
-            })),
+            latestDraftId: shown ? Number(shown.draftId) : null,
+            revision,
+            // 회차 선택에는 생성이 끝난 회차만 (한 회차에 성공한 초안은 하나뿐)
+            drafts: document.drafts
+                .filter((draft) => draft.status === "GENERATED" || draft.status === "ACCEPTED")
+                .map((draft) => ({ draftId: Number(draft.draftId), versionNo: draft.versionNo })),
         };
     },
 
