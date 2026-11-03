@@ -101,8 +101,8 @@ registry.registerPath({
     tags: ["Conversation"],
     summary: "대화 삭제 (CONV-04)",
     description:
-        "대화를 소프트 삭제한다. 이 대화로 만든 문서는 지우지 않고, 문서 상세의 연결된 대화에 deleted: true로 표시된다. S3 파일은 배치로 정리한다. " +
-        "이 대화를 쓰는 문서가 생성 중(첫 초안·AI 보완·재시도)이거나, 분석에 실패해 재시도를 기다리는 중이면 409 CONVERSATION_IN_USE(details.documentIds).",
+        "화면: P03 대화 삭제. 소프트 삭제하며, 이 대화로 만든 문서는 남고 연결된 대화에 deleted: true로 표시된다. " +
+        "이 대화를 쓰는 문서가 생성 중(첫 초안·AI 보완·재시도)이면 409 CONVERSATION_IN_USE(details.documentIds). ",
     security: bearerAuth,
     request: { params: conversationIdParamsSchema },
     responses: {
