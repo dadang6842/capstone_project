@@ -114,7 +114,7 @@ export const draftService = {
             throw new AppError("DRAFT_NOT_FOUND");
         }
 
-        // 실패한 초안만, 그리고 그 회차의 가장 최근 시도만 (이미 재시도했으면 새 행으로 다시 시도해야 함)
+        // 남아 있는 대화로만 다시 분석한다. 실패한 문서의 대화는 삭제할 수 있어서(CONV-04) 모두 없으면 다시 생성할 수 없다
         if (
             draft.status !== "FAILED" ||
             (await draftRepository.hasNewerAttempt(draft.documentId, draft.versionNo, draft.draftId))

@@ -41,8 +41,7 @@ export const conversationRepository = {
     },
 
     // 삭제 전 확인용: 대화와, 이 대화를 쓰는 문서 중 삭제를 막는 문서만
-    //  - 첫 초안 생성 중(GENERATING)이거나 AI 보완·재시도 중인 초안이 있는 문서
-    //  - 분석 단계에서 실패해 재시도를 기다리는 문서 (FAILED이고 prompt가 NULL → 재시도에 원본이 필요)
+    //  - 첫 초안 생성 중(GENERATING)이거나 AI 보완·재시도 중인 초안이 있는 문서 (설계서: 생성 중에만 삭제 불가)
     findByIdWithBlockingDocuments(conversationId: bigint) {
         return prisma.conversation.findUnique({
             where: { conversationId },
@@ -51,11 +50,7 @@ export const conversationRepository = {
                     where: {
                         document: {
                             deletedAt: null,
-                            OR: [
-                                { status: "GENERATING" },
-                                { drafts: { some: { status: "GENERATING" } } },
-                                { status: "FAILED", prompt: null },
-                            ],
+                            OR: [{ status: "GENERATING" }, { drafts: { some: { status: "GENERATING" } } }],
                         },
                     },
                     select: { documentId: true },
