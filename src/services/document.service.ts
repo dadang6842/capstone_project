@@ -5,11 +5,17 @@ import { requestAnalysis } from "../utils/aiServer.js";
 import { getViewUrl } from "../utils/s3.js";
 import { AppError } from "../utils/appError.js";
 import { logger } from "../utils/logger.js";
+import { toPageInfo } from "../schemas/common.schema.js";
 import type {
     CreateDocumentBody,
     CreateDocumentResponse,
+    DocumentDetail,
     DraftHistoryResponse,
+    ListDocumentsQuery,
+    ListDocumentsResponse,
     PendingDocumentsResponse,
+    UpdateDocumentBody,
+    UpdateDocumentResponse,
 } from "../schemas/document.schema.js";
 
 // AI-01: 고른 대화의 원본 Presigned URL을 AI 서버로 보낸다. 문서 생성 요청(DRAFT-01)과 첫 초안 재시도(DRAFT-05)에서 쓴다.
@@ -69,6 +75,96 @@ export const documentService = {
         void sendAnalysisRequest(document.documentId, draftId, conversations);
 
         return { documentId: Number(document.documentId), draftId: Number(draftId), status: "GENERATING" };
+    },
+
+    // 지식 문서 목록(A06). 최종 채택한 문서만 주고, 검토 중인 초안은 미채택 문서 목록(DRAFT-08)에서 본다
+    async list(userId: number, { page, limit, q, category, sort }: ListDocumentsQuery): Promise<ListDocumentsResponse> {
+        const [documents, totalCount] = await documentRepository.findFinalizedPage(
+            BigInt(userId),
+            { q, category, sort },
+            { skip: (page - 1) * limit, take: limit },
+        );
+        return {
+            ...toPageInfo(page, limit, totalCount),
+            documents: documents.map(({ documentId, keywords, ...document }) => ({
+                ...document,
+                documentId: Number(documentId),
+                keywords: keywords.map(({ keyword }) => keyword),
+            })),
+        };
+    },
+
+    // 지식 문서 상세(A07). 최종 채택한 문서만 보여 주고, 검토 중·생성 중·실패 문서와 다른 회원·삭제한 문서는 404
+    // 연결된 대화가 삭제됐으면 deleted: true로 알려 주고, 문서는 계속 열람·수정할 수 있다
+    async get(userId: number, documentId: number): Promise<DocumentDetail> {
+        const document = await documentRepository.findByIdWithDetail(BigInt(documentId));
+        if (!document || document.userId !== BigInt(userId) || document.deletedAt || document.status !== "FINALIZED") {
+            throw new AppError("DOCUMENT_NOT_FOUND");
+        }
+
+        return {
+            documentId: Number(document.documentId),
+            title: document.title,
+            content: document.content,
+            summary: document.summary,
+            category: document.category,
+            keywords: document.keywords.map(({ keyword }) => keyword),
+            conversations: document.sources.map(({ conversation }) => ({
+                conversationId: Number(conversation.conversationId),
+                filename: conversation.filename,
+                deleted: conversation.deletedAt !== null,
+            })),
+            createdAt: document.createdAt,
+            updatedAt: document.updatedAt,
+        };
+    },
+
+    // 지식 문서 직접 수정(A07-1). 다른 회원·삭제한 문서는 404, 최종 채택 전 문서는 409(초안은 A05에서 수정)
+    async update(
+        userId: number,
+        documentId: number,
+        { title, content, keywords }: UpdateDocumentBody,
+    ): Promise<UpdateDocumentResponse> {
+        const document = await documentRepository.findState(BigInt(documentId));
+        if (!document || document.userId !== BigInt(userId) || document.deletedAt)
+            throw new AppError("DOCUMENT_NOT_FOUND");
+        if (document.status !== "FINALIZED") throw new AppError("DOCUMENT_NOT_FINALIZED");
+
+        // 키워드 중복은 처음 나온 것만 남긴다 (DB가 대소문자를 구분하지 않으므로 같은 기준으로)
+        const seen = new Set<string>();
+        const uniqueKeywords = keywords?.filter((keyword) => {
+            const key = keyword.toLowerCase();
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+        });
+
+        const updated = await documentRepository.updateFinalized(BigInt(documentId), {
+            title,
+            content,
+            keywords: uniqueKeywords,
+        });
+        // 확인한 뒤 저장하기 전에 삭제된 경우
+        if (!updated) throw new AppError("DOCUMENT_NOT_FOUND");
+
+        return {
+            documentId: Number(updated.documentId),
+            title: updated.title,
+            keywords: updated.keywords.map(({ keyword }) => keyword),
+            updatedAt: updated.updatedAt,
+        };
+    },
+
+    // 지식 문서 삭제(A07 ⑤, 확인 팝업 P03). A07에서만 삭제하므로 최종 채택한 문서만 지운다.
+    // 다른 회원·삭제한·채택 전 문서는 상세(DOC-02)와 같이 404. 연결된 원본 대화는 지우지 않는다
+    async delete(userId: number, documentId: number): Promise<void> {
+        const document = await documentRepository.findState(BigInt(documentId));
+        if (!document || document.userId !== BigInt(userId) || document.deletedAt || document.status !== "FINALIZED") {
+            throw new AppError("DOCUMENT_NOT_FOUND");
+        }
+        // 확인한 뒤 그 사이에 이미 삭제된 경우(삭제 버튼을 두 번 누름 등)
+        if (!(await documentRepository.softDeleteFinalized(BigInt(documentId))))
+            throw new AppError("DOCUMENT_NOT_FOUND");
     },
 
     // 한 문서의 초안 회차 목록 (본문 제외). 초안 검토 화면의 회차 선택에 쓴다. 다른 회원·삭제한 문서는 404
