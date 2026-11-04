@@ -1,7 +1,18 @@
 import { prisma } from "../config/prisma.js";
+import type { Category, Prisma } from "../generated/prisma/client.js";
 
 // drafts.error_message가 VARCHAR(1000)
 const ERROR_MESSAGE_MAX = 1000;
+
+// 검색어를 FULLTEXT BOOLEAN MODE 검색식으로 바꾼다. "RAG 파이프라인" → +"RAG" +"파이프라인" (단어가 모두 들어간 문서)
+// 검색 연산자로 쓰이는 기호는 지우고, ngram 토큰(2글자)보다 짧은 1글자 단어는 뺀다. 남는 단어가 없으면 null
+function toSearchQuery(q: string) {
+    const words = q
+        .replace(/[+\-<>()~*"@]/g, " ")
+        .split(/\s+/)
+        .filter((word) => word.length >= 2);
+    return words.length > 0 ? words.map((word) => `+"${word}"`).join(" ") : null;
+}
 
 export const documentRepository = {
     // 이 대화들을 쓰는 문서 중 생성 작업이 진행 중인 문서 (첫 초안 생성 중이거나 AI 보완·재시도 중인 초안이 있음)
@@ -45,6 +56,44 @@ export const documentRepository = {
                 },
             },
         });
+    },
+
+    // 지식 문서 목록(DOC-01): 삭제하지 않은 내 최종 문서를 검색어·유형으로 거르고 정렬한 한 페이지와 전체 개수
+    // 검색은 제목·본문 FULLTEXT(ngram) 인덱스를 쓴다. 검색 중에도 관련도가 아니라 고른 정렬을 따른다
+    findFinalizedPage(
+        userId: bigint,
+        { q, category, sort }: { q?: string; category?: Category; sort: "updated" | "created" },
+        { skip, take }: { skip: number; take: number },
+    ) {
+        const search = q === undefined ? undefined : toSearchQuery(q);
+        if (search === null) return Promise.resolve([[], 0] as const);
+
+        const where: Prisma.DocumentWhereInput = {
+            userId,
+            deletedAt: null,
+            status: "FINALIZED",
+            category,
+            // 인덱스가 (title, content) 두 컬럼이라 두 컬럼에 같은 검색식을 넣어야 MATCH(title, content)로 묶인다
+            ...(search && { title: { search }, content: { search } }),
+        };
+        return prisma.$transaction([
+            prisma.document.findMany({
+                where,
+                orderBy: [sort === "created" ? { createdAt: "desc" } : { updatedAt: "desc" }, { documentId: "desc" }],
+                skip,
+                take,
+                select: {
+                    documentId: true,
+                    title: true,
+                    summary: true,
+                    category: true,
+                    createdAt: true,
+                    updatedAt: true,
+                    keywords: { orderBy: { documentKeywordId: "asc" }, select: { keyword: true } },
+                },
+            }),
+            prisma.document.count({ where }),
+        ]);
     },
 
     // 초안 이력 조회용: 문서와 모든 초안의 회차·상태

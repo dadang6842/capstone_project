@@ -5,10 +5,13 @@ import { requestAnalysis } from "../utils/aiServer.js";
 import { getViewUrl } from "../utils/s3.js";
 import { AppError } from "../utils/appError.js";
 import { logger } from "../utils/logger.js";
+import { toPageInfo } from "../schemas/common.schema.js";
 import type {
     CreateDocumentBody,
     CreateDocumentResponse,
     DraftHistoryResponse,
+    ListDocumentsQuery,
+    ListDocumentsResponse,
     PendingDocumentsResponse,
 } from "../schemas/document.schema.js";
 
@@ -69,6 +72,23 @@ export const documentService = {
         void sendAnalysisRequest(document.documentId, draftId, conversations);
 
         return { documentId: Number(document.documentId), draftId: Number(draftId), status: "GENERATING" };
+    },
+
+    // 지식 문서 목록(A06). 최종 채택한 문서만 주고, 검토 중인 초안은 미채택 문서 목록(DRAFT-08)에서 본다
+    async list(userId: number, { page, limit, q, category, sort }: ListDocumentsQuery): Promise<ListDocumentsResponse> {
+        const [documents, totalCount] = await documentRepository.findFinalizedPage(
+            BigInt(userId),
+            { q, category, sort },
+            { skip: (page - 1) * limit, take: limit },
+        );
+        return {
+            ...toPageInfo(page, limit, totalCount),
+            documents: documents.map(({ documentId, keywords, ...document }) => ({
+                ...document,
+                documentId: Number(documentId),
+                keywords: keywords.map(({ keyword }) => keyword),
+            })),
+        };
     },
 
     // 한 문서의 초안 회차 목록 (본문 제외). 초안 검토 화면의 회차 선택에 쓴다. 다른 회원·삭제한 문서는 404

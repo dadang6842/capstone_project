@@ -7,6 +7,8 @@ import {
     createDocumentResponseSchema,
     documentIdParamsSchema,
     draftHistoryResponseSchema,
+    listDocumentsQuerySchema,
+    listDocumentsResponseSchema,
     pendingDocumentsResponseSchema,
 } from "../schemas/document.schema.js";
 import { successResponse } from "../schemas/common.schema.js";
@@ -41,6 +43,26 @@ registry.registerPath({
 });
 router.post("/", authenticate, validate({ body: createDocumentBodySchema }), documentController.create);
 
+registry.registerPath({
+    method: "get",
+    path: "/documents",
+    tags: ["Document"],
+    summary: "지식 문서 목록 조회 (DOC-01)",
+    description:
+        "화면: A06 지식 문서 목록 → A07 상세. 최종 채택한 내 문서를 제목·본문 검색어(q)와 지식 유형(category)으로 거르고, 수정일(기본) 또는 생성일 최신순으로 20개씩 준다. " +
+        "검색해도 정렬은 고른 기준을 따르고, totalCount는 조건에 맞는 문서 수다. ",
+    security: bearerAuth,
+    request: { query: listDocumentsQuerySchema },
+    responses: {
+        200: {
+            description: "지식 문서 목록",
+            content: { "application/json": { schema: successResponse(listDocumentsResponseSchema) } },
+        },
+        ...errorResponses("VALIDATION_ERROR", "UNAUTHORIZED", "TOKEN_EXPIRED"),
+    },
+});
+router.get("/", authenticate, validate({ query: listDocumentsQuerySchema }), documentController.list);
+
 // /:documentId 라우트보다 먼저 둔다 ("pending"이 문서 아이디로 읽히지 않게)
 registry.registerPath({
     method: "get",
@@ -48,9 +70,9 @@ registry.registerPath({
     tags: ["Document"],
     summary: "미채택 문서 목록 (DRAFT-08)",
     description:
-        "초안 검토 화면의 '초안 문서 선택'에 쓰는 목록. 검토할 초안이 있는 내 문서를 원문 대화의 삭제 여부와 관계없이 " +
+        "초안 검토 화면의 '초안 문서 선택'에 쓰는 목록. 검토할 초안이 있는(DRAFT_GENERATED) 내 문서를 원문 대화의 삭제 여부와 관계없이 " +
         "최근 생성순으로 준다(삭제한 문서 제외). 첫 초안 생성 중·실패 문서는 빠진다. title은 생성이 끝난 최신 회차 것이다. " +
-        "초안 회차 선택은 문서를 고른 뒤 DRAFT-06으로 조회한다.",
+        "어떤 회차를 보여 줄지·보완 중인 회차는 문서를 고른 뒤 DRAFT-06으로 조회한다.",
     security: bearerAuth,
     responses: {
         200: {
@@ -66,9 +88,9 @@ registry.registerPath({
     method: "get",
     path: "/documents/{documentId}/drafts",
     tags: ["Document"],
-    summary: "문서의 초안 회차 조회 (DRAFT-06)",
+    summary: "문서의 초안 이력 조회 (DRAFT-06)",
     description:
-        "초안 검토 화면의 회차 선택(A05)에 쓴다. 생성이 끝난 회차의 아이디·번호만 준다. latestDraftId는 처음 보여 줄 회차, " +
+        "초안 검토 화면의 회차 선택에 쓴다. 생성이 끝난(GENERATED·ACCEPTED) 회차의 아이디·번호만 준다. latestDraftId는 처음 보여 줄 회차, " +
         "revision은 마지막 AI 보완이 생성 중(GENERATING, 버튼을 막고 DRAFT-02로 폴링)이거나 실패(FAILED, 실패 안내와 다시 시도)일 때만 주고 아니면 null. " +
         "다른 회원의 문서, 삭제한 문서는 404.",
     security: bearerAuth,

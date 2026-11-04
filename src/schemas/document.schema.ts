@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { pageInfoShape, pageQuerySchema } from "./common.schema.js";
 
 // 문서 생성 요청(DRAFT-01)
 export const createDocumentBodySchema = z
@@ -90,8 +91,62 @@ export const pendingDocumentsResponseSchema = z
     })
     .meta({ id: "PendingDocuments" });
 
+// 지식 문서 목록(DOC-01). 최종 채택한 문서를 검색어·지식 유형으로 거르고 수정일·생성일 최신순으로
+export const categorySchema = z
+    .enum(["IDEA_NOTE", "CONCEPT_NOTE", "LIST", "MANUAL"])
+    .meta({ description: "지식 유형" });
+
+export const listDocumentsQuerySchema = pageQuerySchema.extend({
+    q: z
+        .string()
+        .trim()
+        // 빈 검색어(?q=)는 검색하지 않은 것으로 본다
+        .transform((q) => q || undefined)
+        .refine(
+            (q) => q === undefined || q.replace(/\s/g, "").length >= 2,
+            "검색어는 공백을 빼고 2글자 이상이어야 합니다.",
+        )
+        .optional()
+        .meta({
+            example: "RAG",
+            description: "제목·본문 검색어 (공백 제외 2글자 이상). 띄어 쓴 단어가 모두 들어간 문서를 찾는다",
+        }),
+    category: categorySchema.optional().meta({ description: "지식 유형 (생략하면 전체)" }),
+    sort: z
+        .enum(["updated", "created"])
+        .default("updated")
+        .meta({ description: "updated: 수정일 최신순(기본), created: 생성일 최신순" }),
+});
+
+export const documentListItemSchema = z
+    .object({
+        documentId: z.number().int().meta({ example: 12 }),
+        title: z
+            .string()
+            .nullable()
+            .meta({
+                example: "JWT 인증 흐름 정리",
+                description: "최종 문서는 항상 있음 (DB 컬럼이 NULL 허용이라 nullable)",
+            }),
+        summary: z.string().nullable().meta({ example: "Access·Refresh Token을 나눠 쓰는 이유와 재발급 흐름" }),
+        category: categorySchema.nullable(),
+        keywords: z.array(z.string()).meta({ example: ["JWT", "Refresh Token"] }),
+        createdAt: z.date().meta({ description: "생성일 (문서 생성을 요청한 일시)" }),
+        updatedAt: z.date().meta({ description: "수정일" }),
+    })
+    .meta({ id: "DocumentListItem" });
+
+export const listDocumentsResponseSchema = z
+    .object({
+        ...pageInfoShape,
+        documents: z.array(documentListItemSchema).meta({ description: "지식 문서 목록 (본문 제외)" }),
+    })
+    .meta({ id: "DocumentList" });
+
 export type CreateDocumentBody = z.infer<typeof createDocumentBodySchema>;
 export type CreateDocumentResponse = z.infer<typeof createDocumentResponseSchema>;
 export type DocumentIdParams = z.infer<typeof documentIdParamsSchema>;
 export type DraftHistoryResponse = z.infer<typeof draftHistoryResponseSchema>;
 export type PendingDocumentsResponse = z.infer<typeof pendingDocumentsResponseSchema>;
+export type ListDocumentsQuery = z.infer<typeof listDocumentsQuerySchema>;
+export type ListDocumentsResponse = z.infer<typeof listDocumentsResponseSchema>;
