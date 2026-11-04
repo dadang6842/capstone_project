@@ -2,7 +2,12 @@ import type { Request, Response } from "express";
 import { documentService } from "../services/document.service.js";
 import { sendSuccess } from "../utils/response.js";
 import { logger } from "../utils/logger.js";
-import type { CreateDocumentBody, DocumentIdParams, ListDocumentsQuery } from "../schemas/document.schema.js";
+import type {
+    CreateDocumentBody,
+    DocumentIdParams,
+    ListDocumentsQuery,
+    UpdateDocumentBody,
+} from "../schemas/document.schema.js";
 
 export const documentController = {
     async create(req: Request, res: Response) {
@@ -19,6 +24,13 @@ export const documentController = {
     async get(req: Request, res: Response) {
         const { documentId } = req.params as unknown as DocumentIdParams;
         const result = await documentService.get(req.user.userId, documentId);
+        sendSuccess(res, result);
+    },
+
+    async update(req: Request, res: Response) {
+        const { documentId } = req.params as unknown as DocumentIdParams;
+        const result = await documentService.update(req.user.userId, documentId, req.body as UpdateDocumentBody);
+        logger.info("지식 문서를 수정하였습니다.", { documentId });
         sendSuccess(res, result);
     },
 

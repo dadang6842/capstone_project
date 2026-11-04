@@ -30,20 +30,30 @@ export const documentIdParamsSchema = z.object({
 // 문서의 초안 이력 조회(DRAFT-06). 초안 검토 화면의 회차 선택용이라 생성이 끝난 회차의 아이디·번호만
 export const draftHistoryResponseSchema = z
     .object({
-        latestDraftId: z.number().int().nullable().meta({
-            example: 31,
-            description:
-                "처음 보여 줄 초안. 채택한 회차, 없으면 생성이 끝난 최신 회차 (AI 보완 중인 회차 제외). 볼 초안이 없으면 null",
-        }),
+        latestDraftId: z
+            .number()
+            .int()
+            .nullable()
+            .meta({
+                example: 31,
+                description:
+                    "처음 보여 줄 초안. 채택한 회차, 없으면 생성이 끝난 최신 회차 (AI 보완 중인 회차 제외). 볼 초안이 없으면 null",
+            }),
         revision: z
             .object({
-                draftId: z.number().int().meta({
-                    example: 33,
-                    description: "AI 보완 초안. 회차·보완 항목은 이 아이디로 초안 조회(DRAFT-02)",
-                }),
-                status: z.enum(["GENERATING", "FAILED"]).meta({
-                    description: "GENERATING이면 보완 중(버튼을 막고 폴링), FAILED면 보완 실패(실패 안내와 다시 시도)",
-                }),
+                draftId: z
+                    .number()
+                    .int()
+                    .meta({
+                        example: 33,
+                        description: "AI 보완 초안. 회차·보완 항목은 이 아이디로 초안 조회(DRAFT-02)",
+                    }),
+                status: z
+                    .enum(["GENERATING", "FAILED"])
+                    .meta({
+                        description:
+                            "GENERATING이면 보완 중(버튼을 막고 폴링), FAILED면 보완 실패(실패 안내와 다시 시도)",
+                    }),
             })
             .nullable()
             .meta({
@@ -111,10 +121,13 @@ export const listDocumentsQuerySchema = pageQuerySchema.extend({
 export const documentListItemSchema = z
     .object({
         documentId: z.number().int().meta({ example: 12 }),
-        title: z.string().nullable().meta({
-            example: "JWT 인증 흐름 정리",
-            description: "최종 문서는 항상 있음 (DB 컬럼이 NULL 허용이라 nullable)",
-        }),
+        title: z
+            .string()
+            .nullable()
+            .meta({
+                example: "JWT 인증 흐름 정리",
+                description: "최종 문서는 항상 있음 (DB 컬럼이 NULL 허용이라 nullable)",
+            }),
         summary: z.string().nullable().meta({ example: "Access·Refresh Token을 나눠 쓰는 이유와 재발급 흐름" }),
         category: categorySchema.nullable(),
         keywords: z.array(z.string()).meta({ example: ["JWT", "Refresh Token"] }),
@@ -133,23 +146,76 @@ export const listDocumentsResponseSchema = z
 // 지식 문서 상세(DOC-02). 최종 채택한 문서만 (검토 중인 초안은 초안 조회 DRAFT-02)
 export const documentDetailSchema = documentListItemSchema
     .extend({
-        content: z.string().nullable().meta({
-            example: "# JWT 인증 흐름 정리\n\n## Access Token\n- 유효기간 30분 ...",
-            description: "본문",
-        }),
+        content: z
+            .string()
+            .nullable()
+            .meta({
+                example: "# JWT 인증 흐름 정리\n\n## Access Token\n- 유효기간 30분 ...",
+                description: "본문 (Markdown, 최종 문서는 항상 있음)",
+            }),
         conversations: z
             .array(
                 z.object({
                     conversationId: z.number().int().meta({ example: 7 }),
                     filename: z.string().meta({ example: "claude-jwt-대화.json" }),
-                    deleted: z.boolean().meta({
-                        description: "대화가 삭제됐는지 (true면 '삭제된 원문'으로 표시하고 열람 버튼을 막음)",
-                    }),
+                    deleted: z
+                        .boolean()
+                        .meta({
+                            description: "대화가 삭제됐는지 (true면 '삭제된 원문'으로 표시하고 열람 버튼을 막음)",
+                        }),
                 }),
             )
             .meta({ description: "연결된 원문 대화 (가져온 순). '원문 열람'은 원본 대화 열람(CONV-03)" }),
     })
     .meta({ id: "DocumentDetail" });
+
+// 지식 문서 직접 수정(DOC-03). A07-1에서 제목·본문·키워드 중 바꾼 것만 보낸다(하나 이상). 지식 유형·요약은 수정하지 않는다
+export const updateDocumentBodySchema = z
+    .object({
+        title: z
+            .string()
+            .trim()
+            .min(1, "제목을 입력해 주세요.")
+            .max(255)
+            .optional()
+            .meta({ example: "JWT 인증 흐름 정리 (Express)", description: "제목 (선택, 보내면 1~255자)" }),
+        content: z
+            .string()
+            .refine((value) => value.trim().length > 0, "본문을 입력해 주세요.")
+            .optional()
+            .meta({
+                example: "# JWT 인증 흐름 정리\n\n## Access Token\n- 유효기간 30분 ...",
+                description: "본문 Markdown (선택, 보내면 공백만 있는 값 불가)",
+            }),
+        keywords: z
+            .array(z.string().trim().min(1, "공백만 있는 키워드는 넣을 수 없습니다.").max(50))
+            .max(10)
+            .optional()
+            .meta({
+                example: ["JWT", "Refresh Token", "Express"],
+                description:
+                    "키워드 전체 목록 (선택, 보내면 0~10개, 키워드당 1~50자). 보낸 목록으로 통째로 바꾸고, 중복(대소문자 무시)은 하나로 합친다",
+            }),
+    })
+    .refine(
+        (body) => body.title !== undefined || body.content !== undefined || body.keywords !== undefined,
+        "제목·본문·키워드 중 하나는 보내야 합니다.",
+    )
+    .meta({ id: "UpdateDocumentRequest" });
+
+export const updateDocumentResponseSchema = z
+    .object({
+        documentId: z.number().int().meta({ example: 12 }),
+        title: z
+            .string()
+            .nullable()
+            .meta({ example: "JWT 인증 흐름 정리 (Express)", description: "저장된 제목 (최종 문서는 항상 있음)" }),
+        keywords: z
+            .array(z.string())
+            .meta({ example: ["JWT", "Refresh Token", "Express"], description: "저장된 키워드" }),
+        updatedAt: z.date().meta({ description: "수정일 (A07에 표시)" }),
+    })
+    .meta({ id: "UpdateDocumentResponse" });
 
 export type CreateDocumentBody = z.infer<typeof createDocumentBodySchema>;
 export type CreateDocumentResponse = z.infer<typeof createDocumentResponseSchema>;
@@ -159,3 +225,5 @@ export type PendingDocumentsResponse = z.infer<typeof pendingDocumentsResponseSc
 export type ListDocumentsQuery = z.infer<typeof listDocumentsQuerySchema>;
 export type ListDocumentsResponse = z.infer<typeof listDocumentsResponseSchema>;
 export type DocumentDetail = z.infer<typeof documentDetailSchema>;
+export type UpdateDocumentBody = z.infer<typeof updateDocumentBodySchema>;
+export type UpdateDocumentResponse = z.infer<typeof updateDocumentResponseSchema>;

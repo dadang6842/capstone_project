@@ -14,6 +14,8 @@ import type {
     ListDocumentsQuery,
     ListDocumentsResponse,
     PendingDocumentsResponse,
+    UpdateDocumentBody,
+    UpdateDocumentResponse,
 } from "../schemas/document.schema.js";
 
 // AI-01: 고른 대화의 원본 Presigned URL을 AI 서버로 보낸다. 문서 생성 요청(DRAFT-01)과 첫 초안 재시도(DRAFT-05)에서 쓴다.
@@ -114,6 +116,42 @@ export const documentService = {
             })),
             createdAt: document.createdAt,
             updatedAt: document.updatedAt,
+        };
+    },
+
+    // 지식 문서 직접 수정(A07-1). 다른 회원·삭제한 문서는 404, 최종 채택 전 문서는 409(초안은 A05에서 수정)
+    async update(
+        userId: number,
+        documentId: number,
+        { title, content, keywords }: UpdateDocumentBody,
+    ): Promise<UpdateDocumentResponse> {
+        const document = await documentRepository.findState(BigInt(documentId));
+        if (!document || document.userId !== BigInt(userId) || document.deletedAt)
+            throw new AppError("DOCUMENT_NOT_FOUND");
+        if (document.status !== "FINALIZED") throw new AppError("DOCUMENT_NOT_FINALIZED");
+
+        // 키워드 중복은 처음 나온 것만 남긴다 (DB가 대소문자를 구분하지 않으므로 같은 기준으로)
+        const seen = new Set<string>();
+        const uniqueKeywords = keywords?.filter((keyword) => {
+            const key = keyword.toLowerCase();
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+        });
+
+        const updated = await documentRepository.updateFinalized(BigInt(documentId), {
+            title,
+            content,
+            keywords: uniqueKeywords,
+        });
+        // 확인한 뒤 저장하기 전에 삭제된 경우
+        if (!updated) throw new AppError("DOCUMENT_NOT_FOUND");
+
+        return {
+            documentId: Number(updated.documentId),
+            title: updated.title,
+            keywords: updated.keywords.map(({ keyword }) => keyword),
+            updatedAt: updated.updatedAt,
         };
     },
 

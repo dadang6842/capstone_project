@@ -110,6 +110,44 @@ export const documentRepository = {
         });
     },
 
+    // 직접 수정 전 확인용: 주인·상태·삭제 여부만
+    findState(documentId: bigint) {
+        return prisma.document.findUnique({
+            where: { documentId },
+            select: { userId: true, status: true, deletedAt: true },
+        });
+    },
+
+    // 지식 문서 직접 수정(DOC-03): 받은 제목·본문만 덮어쓰고, 키워드를 받았으면 통째로 바꾼다(이전 내용은 보관하지 않음)
+    // 키워드만 바꿔도 수정일이 바뀌도록 updated_at은 직접 넣는다. 그 사이 문서가 삭제됐으면 null
+    // 키워드 UNIQUE가 대소문자를 구분하지 않아서 skipDuplicates로 겹치는 값은 건너뛴다
+    updateFinalized(documentId: bigint, data: { title?: string; content?: string; keywords?: string[] }) {
+        return prisma.$transaction(async (tx) => {
+            const { count } = await tx.document.updateMany({
+                where: { documentId, status: "FINALIZED", deletedAt: null },
+                data: { title: data.title, content: data.content, updatedAt: new Date() },
+            });
+            if (count === 0) return null;
+
+            if (data.keywords) {
+                await tx.documentKeyword.deleteMany({ where: { documentId } });
+                await tx.documentKeyword.createMany({
+                    data: data.keywords.map((keyword) => ({ documentId, keyword })),
+                    skipDuplicates: true,
+                });
+            }
+            return tx.document.findUniqueOrThrow({
+                where: { documentId },
+                select: {
+                    documentId: true,
+                    title: true,
+                    updatedAt: true,
+                    keywords: { orderBy: { documentKeywordId: "asc" }, select: { keyword: true } },
+                },
+            });
+        });
+    },
+
     // 초안 이력 조회용: 문서와 모든 초안의 회차·상태
     findWithDraftHistory(documentId: bigint) {
         return prisma.document.findUnique({

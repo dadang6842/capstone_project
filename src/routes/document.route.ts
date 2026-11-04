@@ -11,6 +11,8 @@ import {
     listDocumentsQuerySchema,
     listDocumentsResponseSchema,
     pendingDocumentsResponseSchema,
+    updateDocumentBodySchema,
+    updateDocumentResponseSchema,
 } from "../schemas/document.schema.js";
 import { successResponse } from "../schemas/common.schema.js";
 import { registry, errorResponses, bearerAuth } from "../docs/openapi.js";
@@ -117,7 +119,7 @@ registry.registerPath({
     tags: ["Document"],
     summary: "지식 문서 상세 조회 (DOC-02)",
     description:
-        "화면: A07 지식 문서 상세. 최종 채택한 문서의 본문·키워드와 연결된 원문 대화를 준다. " +
+        "화면: A06·A05(최종 채택 후) → A07 지식 문서 상세. 최종 채택한 문서의 본문·키워드와 연결된 원문 대화를 준다. " +
         "원문 열람은 conversations[]의 아이디로 원본 대화 열람(CONV-03), 삭제된 원문은 deleted: true. 채택 전 문서, 다른 회원·삭제한 문서는 404.",
     security: bearerAuth,
     request: { params: documentIdParamsSchema },
@@ -130,5 +132,39 @@ registry.registerPath({
     },
 });
 router.get("/:documentId", authenticate, validate({ params: documentIdParamsSchema }), documentController.get);
+
+registry.registerPath({
+    method: "patch",
+    path: "/documents/{documentId}",
+    tags: ["Document"],
+    summary: "지식 문서 직접 수정 (DOC-03)",
+    description:
+        "화면: A07-1 지식 문서 직접 수정. 최종 채택한 문서의 제목·본문·키워드 중 보낸 것만 저장하고 수정일을 갱신한다(이전 내용은 보관하지 않음). " +
+        "키워드를 보내면 그 목록으로 통째로 바뀐다. 지식 유형·요약은 수정할 수 없다. 채택 전 문서는 409 DOCUMENT_NOT_FINALIZED.",
+    security: bearerAuth,
+    request: {
+        params: documentIdParamsSchema,
+        body: { required: true, content: { "application/json": { schema: updateDocumentBodySchema } } },
+    },
+    responses: {
+        200: {
+            description: "수정 완료",
+            content: { "application/json": { schema: successResponse(updateDocumentResponseSchema) } },
+        },
+        ...errorResponses(
+            "VALIDATION_ERROR",
+            "UNAUTHORIZED",
+            "TOKEN_EXPIRED",
+            "DOCUMENT_NOT_FOUND",
+            "DOCUMENT_NOT_FINALIZED",
+        ),
+    },
+});
+router.patch(
+    "/:documentId",
+    authenticate,
+    validate({ params: documentIdParamsSchema, body: updateDocumentBodySchema }),
+    documentController.update,
+);
 
 export default router;
