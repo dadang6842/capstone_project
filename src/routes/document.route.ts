@@ -5,6 +5,7 @@ import { documentController } from "../controllers/document.controller.js";
 import {
     createDocumentBodySchema,
     createDocumentResponseSchema,
+    documentDetailSchema,
     documentIdParamsSchema,
     draftHistoryResponseSchema,
     listDocumentsQuerySchema,
@@ -50,7 +51,7 @@ registry.registerPath({
     summary: "지식 문서 목록 조회 (DOC-01)",
     description:
         "화면: A06 지식 문서 목록 → A07 상세. 최종 채택한 내 문서를 제목·본문 검색어(q)와 지식 유형(category)으로 거르고, 수정일(기본) 또는 생성일 최신순으로 20개씩 준다. " +
-        "검색해도 정렬은 고른 기준을 따르고, totalCount는 조건에 맞는 문서 수다. ",
+        "검색해도 정렬은 고른 기준을 따르고, totalCount는 조건에 맞는 문서 수다. 검토 중인 초안은 여기 나오지 않는다(미채택 문서 목록 DRAFT-08).",
     security: bearerAuth,
     request: { query: listDocumentsQuerySchema },
     responses: {
@@ -109,5 +110,25 @@ router.get(
     validate({ params: documentIdParamsSchema }),
     documentController.listDrafts,
 );
+
+registry.registerPath({
+    method: "get",
+    path: "/documents/{documentId}",
+    tags: ["Document"],
+    summary: "지식 문서 상세 조회 (DOC-02)",
+    description:
+        "화면: A07 지식 문서 상세. 최종 채택한 문서의 본문·키워드와 연결된 원문 대화를 준다. " +
+        "원문 열람은 conversations[]의 아이디로 원본 대화 열람(CONV-03), 삭제된 원문은 deleted: true. 채택 전 문서, 다른 회원·삭제한 문서는 404.",
+    security: bearerAuth,
+    request: { params: documentIdParamsSchema },
+    responses: {
+        200: {
+            description: "지식 문서 상세",
+            content: { "application/json": { schema: successResponse(documentDetailSchema) } },
+        },
+        ...errorResponses("VALIDATION_ERROR", "UNAUTHORIZED", "TOKEN_EXPIRED", "DOCUMENT_NOT_FOUND"),
+    },
+});
+router.get("/:documentId", authenticate, validate({ params: documentIdParamsSchema }), documentController.get);
 
 export default router;

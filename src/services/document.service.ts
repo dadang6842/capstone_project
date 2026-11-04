@@ -9,6 +9,7 @@ import { toPageInfo } from "../schemas/common.schema.js";
 import type {
     CreateDocumentBody,
     CreateDocumentResponse,
+    DocumentDetail,
     DraftHistoryResponse,
     ListDocumentsQuery,
     ListDocumentsResponse,
@@ -88,6 +89,31 @@ export const documentService = {
                 documentId: Number(documentId),
                 keywords: keywords.map(({ keyword }) => keyword),
             })),
+        };
+    },
+
+    // 지식 문서 상세(A07). 최종 채택한 문서만 보여 주고, 검토 중·생성 중·실패 문서와 다른 회원·삭제한 문서는 404
+    // 연결된 대화가 삭제됐으면 deleted: true로 알려 주고, 문서는 계속 열람·수정할 수 있다
+    async get(userId: number, documentId: number): Promise<DocumentDetail> {
+        const document = await documentRepository.findByIdWithDetail(BigInt(documentId));
+        if (!document || document.userId !== BigInt(userId) || document.deletedAt || document.status !== "FINALIZED") {
+            throw new AppError("DOCUMENT_NOT_FOUND");
+        }
+
+        return {
+            documentId: Number(document.documentId),
+            title: document.title,
+            content: document.content,
+            summary: document.summary,
+            category: document.category,
+            keywords: document.keywords.map(({ keyword }) => keyword),
+            conversations: document.sources.map(({ conversation }) => ({
+                conversationId: Number(conversation.conversationId),
+                filename: conversation.filename,
+                deleted: conversation.deletedAt !== null,
+            })),
+            createdAt: document.createdAt,
+            updatedAt: document.updatedAt,
         };
     },
 

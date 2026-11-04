@@ -16,6 +16,12 @@ export const documentController = {
         sendSuccess(res, result);
     },
 
+    async get(req: Request, res: Response) {
+        const { documentId } = req.params as unknown as DocumentIdParams;
+        const result = await documentService.get(req.user.userId, documentId);
+        sendSuccess(res, result);
+    },
+
     async listDrafts(req: Request, res: Response) {
         const { documentId } = req.params as unknown as DocumentIdParams;
         const result = await documentService.listDrafts(req.user.userId, documentId);

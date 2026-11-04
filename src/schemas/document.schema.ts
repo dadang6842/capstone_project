@@ -30,30 +30,20 @@ export const documentIdParamsSchema = z.object({
 // 문서의 초안 이력 조회(DRAFT-06). 초안 검토 화면의 회차 선택용이라 생성이 끝난 회차의 아이디·번호만
 export const draftHistoryResponseSchema = z
     .object({
-        latestDraftId: z
-            .number()
-            .int()
-            .nullable()
-            .meta({
-                example: 31,
-                description:
-                    "처음 보여 줄 초안. 채택한 회차, 없으면 생성이 끝난 최신 회차 (AI 보완 중인 회차 제외). 볼 초안이 없으면 null",
-            }),
+        latestDraftId: z.number().int().nullable().meta({
+            example: 31,
+            description:
+                "처음 보여 줄 초안. 채택한 회차, 없으면 생성이 끝난 최신 회차 (AI 보완 중인 회차 제외). 볼 초안이 없으면 null",
+        }),
         revision: z
             .object({
-                draftId: z
-                    .number()
-                    .int()
-                    .meta({
-                        example: 33,
-                        description: "AI 보완 초안. 회차·보완 항목은 이 아이디로 초안 조회(DRAFT-02)",
-                    }),
-                status: z
-                    .enum(["GENERATING", "FAILED"])
-                    .meta({
-                        description:
-                            "GENERATING이면 보완 중(버튼을 막고 폴링), FAILED면 보완 실패(실패 안내와 다시 시도)",
-                    }),
+                draftId: z.number().int().meta({
+                    example: 33,
+                    description: "AI 보완 초안. 회차·보완 항목은 이 아이디로 초안 조회(DRAFT-02)",
+                }),
+                status: z.enum(["GENERATING", "FAILED"]).meta({
+                    description: "GENERATING이면 보완 중(버튼을 막고 폴링), FAILED면 보완 실패(실패 안내와 다시 시도)",
+                }),
             })
             .nullable()
             .meta({
@@ -121,13 +111,10 @@ export const listDocumentsQuerySchema = pageQuerySchema.extend({
 export const documentListItemSchema = z
     .object({
         documentId: z.number().int().meta({ example: 12 }),
-        title: z
-            .string()
-            .nullable()
-            .meta({
-                example: "JWT 인증 흐름 정리",
-                description: "최종 문서는 항상 있음 (DB 컬럼이 NULL 허용이라 nullable)",
-            }),
+        title: z.string().nullable().meta({
+            example: "JWT 인증 흐름 정리",
+            description: "최종 문서는 항상 있음 (DB 컬럼이 NULL 허용이라 nullable)",
+        }),
         summary: z.string().nullable().meta({ example: "Access·Refresh Token을 나눠 쓰는 이유와 재발급 흐름" }),
         category: categorySchema.nullable(),
         keywords: z.array(z.string()).meta({ example: ["JWT", "Refresh Token"] }),
@@ -143,6 +130,27 @@ export const listDocumentsResponseSchema = z
     })
     .meta({ id: "DocumentList" });
 
+// 지식 문서 상세(DOC-02). 최종 채택한 문서만 (검토 중인 초안은 초안 조회 DRAFT-02)
+export const documentDetailSchema = documentListItemSchema
+    .extend({
+        content: z.string().nullable().meta({
+            example: "# JWT 인증 흐름 정리\n\n## Access Token\n- 유효기간 30분 ...",
+            description: "본문",
+        }),
+        conversations: z
+            .array(
+                z.object({
+                    conversationId: z.number().int().meta({ example: 7 }),
+                    filename: z.string().meta({ example: "claude-jwt-대화.json" }),
+                    deleted: z.boolean().meta({
+                        description: "대화가 삭제됐는지 (true면 '삭제된 원문'으로 표시하고 열람 버튼을 막음)",
+                    }),
+                }),
+            )
+            .meta({ description: "연결된 원문 대화 (가져온 순). '원문 열람'은 원본 대화 열람(CONV-03)" }),
+    })
+    .meta({ id: "DocumentDetail" });
+
 export type CreateDocumentBody = z.infer<typeof createDocumentBodySchema>;
 export type CreateDocumentResponse = z.infer<typeof createDocumentResponseSchema>;
 export type DocumentIdParams = z.infer<typeof documentIdParamsSchema>;
@@ -150,3 +158,4 @@ export type DraftHistoryResponse = z.infer<typeof draftHistoryResponseSchema>;
 export type PendingDocumentsResponse = z.infer<typeof pendingDocumentsResponseSchema>;
 export type ListDocumentsQuery = z.infer<typeof listDocumentsQuerySchema>;
 export type ListDocumentsResponse = z.infer<typeof listDocumentsResponseSchema>;
+export type DocumentDetail = z.infer<typeof documentDetailSchema>;

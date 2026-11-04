@@ -96,6 +96,20 @@ export const documentRepository = {
         ]);
     },
 
+    // 지식 문서 상세(DOC-02): 문서와 키워드, 연결된 대화(삭제 여부 포함)
+    findByIdWithDetail(documentId: bigint) {
+        return prisma.document.findUnique({
+            where: { documentId },
+            include: {
+                keywords: { orderBy: { documentKeywordId: "asc" }, select: { keyword: true } },
+                sources: {
+                    orderBy: { conversationId: "asc" },
+                    select: { conversation: { select: { conversationId: true, filename: true, deletedAt: true } } },
+                },
+            },
+        });
+    },
+
     // 초안 이력 조회용: 문서와 모든 초안의 회차·상태
     findWithDraftHistory(documentId: bigint) {
         return prisma.document.findUnique({
