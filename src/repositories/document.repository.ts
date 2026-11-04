@@ -148,6 +148,15 @@ export const documentRepository = {
         });
     },
 
+    // 지식 문서 삭제(DOC-04): 소프트 삭제. 연결된 대화·키워드·초안은 그대로 둔다. 이미 삭제됐거나 최종 문서가 아니면 0건
+    async softDeleteFinalized(documentId: bigint) {
+        const { count } = await prisma.document.updateMany({
+            where: { documentId, status: "FINALIZED", deletedAt: null },
+            data: { deletedAt: new Date() },
+        });
+        return count > 0;
+    },
+
     // 초안 이력 조회용: 문서와 모든 초안의 회차·상태
     findWithDraftHistory(documentId: bigint) {
         return prisma.document.findUnique({

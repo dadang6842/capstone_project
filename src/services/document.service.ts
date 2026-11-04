@@ -155,6 +155,18 @@ export const documentService = {
         };
     },
 
+    // 지식 문서 삭제(A07 ⑤, 확인 팝업 P03). A07에서만 삭제하므로 최종 채택한 문서만 지운다.
+    // 다른 회원·삭제한·채택 전 문서는 상세(DOC-02)와 같이 404. 연결된 원본 대화는 지우지 않는다
+    async delete(userId: number, documentId: number): Promise<void> {
+        const document = await documentRepository.findState(BigInt(documentId));
+        if (!document || document.userId !== BigInt(userId) || document.deletedAt || document.status !== "FINALIZED") {
+            throw new AppError("DOCUMENT_NOT_FOUND");
+        }
+        // 확인한 뒤 그 사이에 이미 삭제된 경우(삭제 버튼을 두 번 누름 등)
+        if (!(await documentRepository.softDeleteFinalized(BigInt(documentId))))
+            throw new AppError("DOCUMENT_NOT_FOUND");
+    },
+
     // 한 문서의 초안 회차 목록 (본문 제외). 초안 검토 화면의 회차 선택에 쓴다. 다른 회원·삭제한 문서는 404
     async listDrafts(userId: number, documentId: number): Promise<DraftHistoryResponse> {
         const document = await documentRepository.findWithDraftHistory(BigInt(documentId));

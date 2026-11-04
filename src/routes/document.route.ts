@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { z } from "zod";
 import { authenticate } from "../middlewares/authenticate.js";
 import { validate } from "../middlewares/validate.js";
 import { documentController } from "../controllers/document.controller.js";
@@ -139,7 +140,7 @@ registry.registerPath({
     tags: ["Document"],
     summary: "지식 문서 직접 수정 (DOC-03)",
     description:
-        "화면: A07-1 지식 문서 직접 수정. 최종 채택한 문서의 제목·본문·키워드 중 보낸 것만 저장하고 수정일을 갱신한다(이전 내용은 보관하지 않음). " +
+        "화면: A07-1 지식 문서 직접 수정 → A07. 최종 채택한 문서의 제목·본문·키워드 중 보낸 것만 저장하고 수정일을 갱신한다(이전 내용은 보관하지 않음). " +
         "키워드를 보내면 그 목록으로 통째로 바뀐다. 지식 유형·요약은 수정할 수 없다. 채택 전 문서는 409 DOCUMENT_NOT_FINALIZED.",
     security: bearerAuth,
     request: {
@@ -166,5 +167,25 @@ router.patch(
     validate({ params: documentIdParamsSchema, body: updateDocumentBodySchema }),
     documentController.update,
 );
+
+registry.registerPath({
+    method: "delete",
+    path: "/documents/{documentId}",
+    tags: ["Document"],
+    summary: "지식 문서 삭제 (DOC-04)",
+    description:
+        "화면: A07 ⑤ 문서 삭제 → P03 삭제 확인 → A06. 최종 채택한 문서를 소프트 삭제해 목록·통계에서 뺀다(휴지통·복구 없음). " +
+        "연결된 원본 대화는 지우지 않는다. 채택 전 문서, 다른 회원·이미 삭제한 문서는 404.",
+    security: bearerAuth,
+    request: { params: documentIdParamsSchema },
+    responses: {
+        200: {
+            description: "삭제 완료 (data: null)",
+            content: { "application/json": { schema: successResponse(z.null()) } },
+        },
+        ...errorResponses("VALIDATION_ERROR", "UNAUTHORIZED", "TOKEN_EXPIRED", "DOCUMENT_NOT_FOUND"),
+    },
+});
+router.delete("/:documentId", authenticate, validate({ params: documentIdParamsSchema }), documentController.delete);
 
 export default router;

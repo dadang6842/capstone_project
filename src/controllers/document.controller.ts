@@ -34,6 +34,13 @@ export const documentController = {
         sendSuccess(res, result);
     },
 
+    async delete(req: Request, res: Response) {
+        const { documentId } = req.params as unknown as DocumentIdParams;
+        await documentService.delete(req.user.userId, documentId);
+        logger.info("지식 문서를 삭제하였습니다.", { documentId });
+        sendSuccess(res, null);
+    },
+
     async listDrafts(req: Request, res: Response) {
         const { documentId } = req.params as unknown as DocumentIdParams;
         const result = await documentService.listDrafts(req.user.userId, documentId);
