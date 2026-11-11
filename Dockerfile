@@ -1,5 +1,5 @@
 # ---------- 1단계: 빌드 ----------
-FROM node:22-alpine AS build
+FROM node:22-bookworm-slim
 WORKDIR /app
 
 # 의존성 먼저 설치 (package*.json·prisma가 안 바뀌면 캐시 재사용)
@@ -19,8 +19,17 @@ RUN npm prune --omit=dev && npm cache clean --force
 
 
 # ---------- 2단계: 실행 ----------
-FROM node:22-alpine
+FROM node:22-bookworm-slim
 WORKDIR /app
+# 공유 대화 수집 모듈(collector/)용 Python + Playwright + Chromium(headless shell)
+ENV VIRTUAL_ENV=/opt/venv PATH=/opt/venv/bin:$PATH PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+COPY collector/requirements.txt /tmp/collector-requirements.txt
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends python3 python3-venv \
+ && python3 -m venv /opt/venv \
+ && pip install --no-cache-dir -r /tmp/collector-requirements.txt \
+ && playwright install --with-deps --only-shell chromium \
+ && rm -rf /var/lib/apt/lists/* /tmp/collector-requirements.txt
 # 로그 시각을 한국 시간으로, 로그 파일은 /var/log/backend에 (EC2 디렉터리를 볼륨으로 연결)
 ENV NODE_ENV=production TZ=Asia/Seoul LOG_DIR=/var/log/backend
 RUN mkdir -p /var/log/backend && chown node:node /var/log/backend
@@ -31,6 +40,7 @@ COPY --from=build /app/package*.json /app/prisma.config.ts ./
 COPY --from=build /app/prisma ./prisma
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
+COPY collector/*.py ./collector/
 
 USER node
 EXPOSE 3000
