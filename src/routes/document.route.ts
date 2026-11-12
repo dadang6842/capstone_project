@@ -26,7 +26,7 @@ registry.registerPath({
     tags: ["Document"],
     summary: "문서 생성 요청 (DRAFT-01)",
     description:
-        "대화 목록에서 고른 대화로 문서 생성을 요청한다. 문서·1회차 초안을 GENERATING으로 만들고 바로 응답한 뒤, 뒤에서 AI 서버로 분석을 요청한다(AI-01). " +
+        "대화 목록에서 고른 대화로 문서 생성을 요청한다. 문서·1회차 초안을 GENERATING으로 만들고 바로 응답한 뒤, 뒤에서 AI 서버에 첫 초안 생성을 요청한다(AI-01, 응답으로 초안을 받음). " +
         "프론트는 응답의 draftId로 초안 조회(DRAFT-02)를 폴링한다. AI 서버에 요청을 보내지 못하면 초안이 FAILED가 되고 다시 시도(DRAFT-05)할 수 있다. " +
         "다른 회원·삭제한·없는 대화가 섞이면 404(details.conversationIds), 생성 작업이 진행 중인 대화가 섞이면 409(details.documentIds).",
     security: bearerAuth,

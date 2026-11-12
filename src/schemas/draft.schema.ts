@@ -12,7 +12,7 @@ export const draftDetailSchema = z
         parentDraftId: z.number().int().nullable().meta({ description: "이전 초안 아이디 (1회차는 null)" }),
         versionNo: z.number().int().meta({ example: 1, description: "초안 회차" }),
         status: z
-            .enum(["GENERATING", "GENERATED", "ACCEPTED", "FAILED", "NOT_KNOWLEDGE"])
+            .enum(["GENERATING", "GENERATED", "ACCEPTED", "FAILED"])
             .meta({ description: "초안 상태. GENERATING이면 몇 초 뒤 다시 조회" }),
         title: z.string().nullable().meta({ example: "Prisma로 ERD 옮기기", description: "생성 완료 전에는 null" }),
         summary: z.string().nullable(),
@@ -24,7 +24,7 @@ export const draftDetailSchema = z
             .meta({ description: "이 회차를 만들 때 요청한 보완 항목 코드 (1회차는 빈 배열)" }),
         createdAt: z.date(),
         documentStatus: z
-            .enum(["GENERATING", "DRAFT_GENERATED", "FINALIZED", "FAILED", "NOT_KNOWLEDGE"])
+            .enum(["GENERATING", "DRAFT_GENERATED", "FINALIZED", "FAILED"])
             .meta({ description: "문서 상태" }),
         revising: z
             .boolean()
@@ -33,7 +33,10 @@ export const draftDetailSchema = z
             .array(
                 z.object({
                     conversationId: z.number().int().meta({ example: 7 }),
-                    filename: z.string().meta({ example: "claude-jwt-대화.json" }),
+                    title: z
+                        .string()
+                        .nullable()
+                        .meta({ example: "JWT 인증 흐름 정리", description: "공유 페이지 제목" }),
                     deleted: z.boolean().meta({ description: "대화가 삭제됐는지 (true면 원문 열람 불가)" }),
                 }),
             )
@@ -44,13 +47,10 @@ export const draftDetailSchema = z
 // 초안 생성 재시도(DRAFT-05)
 export const retryDraftResponseSchema = z
     .object({
-        draftId: z
-            .number()
-            .int()
-            .meta({
-                example: 33,
-                description: "재시도로 새로 만든 초안 아이디. 이 아이디로 초안 조회(DRAFT-02)를 폴링한다",
-            }),
+        draftId: z.number().int().meta({
+            example: 33,
+            description: "재시도로 새로 만든 초안 아이디. 이 아이디로 초안 조회(DRAFT-02)를 폴링한다",
+        }),
         status: z.literal("GENERATING"),
     })
     .meta({ id: "RetryDraftResponse" });
