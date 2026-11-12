@@ -1,48 +1,63 @@
 import { z } from "zod";
 import { pageInfoShape, pageQuerySchema } from "./common.schema.js";
 
-// 대화 응답 (CONV-01 업로드, CONV-02 목록, CONV-03 열람에서 같이 쓴다)
+export const conversationStatusSchema = z
+    .enum(["COLLECTING", "COLLECTED", "FAILED"])
+    .meta({
+        description:
+            "수집 상태. COLLECTING이면 원본 대화 열람(CONV-03)으로 몇 초 간격 폴링, COLLECTED여야 문서 생성에 쓸 수 있음",
+    });
+
+export const collectFailReasonSchema = z
+    .enum(["NOT_ACCESSIBLE", "UNSUPPORTED_CONTENT", "TIMEOUT", "COLLECT_ERROR", "DUPLICATED"])
+    .nullable()
+    .meta({
+        description:
+            "수집 실패 원인 (FAILED일 때만). NOT_ACCESSIBLE 링크 접근 실패(삭제·비공개), UNSUPPORTED_CONTENT 수집할 수 없는 대화(이미지 전용 발화 등), TIMEOUT 시간 초과, COLLECT_ERROR 기타, DUPLICATED 이미 수집한 대화와 내용이 같음(삭제하고 기존 대화를 쓰면 됨)",
+    });
+
+// 대화 응답 (CONV-01 등록, CONV-02 목록, CONV-03 열람에서 같이 쓴다)
 export const conversationSchema = z
     .object({
         conversationId: z.number().int().meta({ example: 7 }),
-        filename: z.string().meta({ example: "claude-jwt-대화.json", description: "원본 파일명" }),
-        contentType: z.string().nullable().meta({ example: "application/json" }),
-        fileSize: z.number().int().meta({ example: 812034, description: "파일 크기 (byte)" }),
-        createdAt: z.date().meta({ description: "가져온 일시 (ISO 8601 UTC)" }),
-        refinedAt: z.date().nullable().meta({ description: "AI가 정리한 일시 (null이면 올린 원본 그대로)" }),
+        title: z
+            .string()
+            .nullable()
+            .meta({ example: "JWT 인증 흐름 질문", description: "공유 페이지 제목 (수집 전·실패면 null)" }),
+        shareUrl: z.string().meta({ example: "https://chatgpt.com/share/6af3fb20-85d0-83ec-84a7-783771ddb6cf" }),
+        status: conversationStatusSchema,
+        collectFailReason: collectFailReasonSchema,
+        messageCount: z.number().int().meta({ example: 34, description: "수집한 발화 수 (수집 전·실패면 0)" }),
+        createdAt: z.date().meta({ description: "등록 일시 (ISO 8601 UTC)" }),
     })
     .meta({ id: "Conversation" });
 
-// 대화 가져오기(CONV-01) 요청 (multipart/form-data, 스웨거 문서용. 검증은 upload 미들웨어가 함)
-export const uploadConversationsBodySchema = z
+// 대화 가져오기(CONV-01): 공유 링크 등록
+export const createConversationBodySchema = z
     .object({
-        files: z
-            .array(z.string().meta({ format: "binary" }))
-            .meta({ description: "대화 내보내기 파일 (요청당 1~20개, 파일당 50MB, .json)" }),
+        url: z.string().trim().min(1).max(2000).meta({
+            example: "https://chatgpt.com/share/6af3fb20-85d0-83ec-84a7-783771ddb6cf",
+            description: "ChatGPT 공유 링크. 링크가 들어 있는 문장을 그대로 넣어도 된다 (링크는 1개만)",
+        }),
     })
-    .meta({ id: "UploadConversationsRequest" });
+    .meta({ id: "CreateConversationRequest" });
 
-export const uploadConversationsResponseSchema = z
+export const createConversationResponseSchema = z
     .object({
-        conversations: z.array(conversationSchema).meta({ description: "저장된 대화 (올린 순서)" }),
-        failed: z
-            .array(
-                z.object({
-                    filename: z.string().meta({ example: "chatgpt-export.zip" }),
-                    code: z.string().meta({ example: "UNSUPPORTED_FILE_TYPE" }),
-                    message: z.string().meta({ example: "JSON 파일만 올릴 수 있습니다." }),
-                }),
-            )
-            .meta({ description: "저장하지 못한 파일 (없으면 빈 배열)" }),
+        conversationId: z.number().int().meta({ example: 7 }),
+        status: z.literal("COLLECTING"),
     })
-    .meta({ id: "UploadConversationsResponse" });
+    .meta({ id: "CreateConversationResponse" });
 
 // 대화 목록 조회(CONV-02)
 export const listConversationsQuerySchema = pageQuerySchema;
 
-export const generationStatusSchema = z.enum(["NONE", "GENERATING", "FAILED", "PENDING_REVIEW", "COMPLETED"]).meta({
-    description: "이 대화로 만든 문서들의 상태. 여러 개면 GENERATING > FAILED > PENDING_REVIEW > COMPLETED 순으로 하나",
-});
+export const generationStatusSchema = z
+    .enum(["NONE", "GENERATING", "FAILED", "PENDING_REVIEW", "COMPLETED"])
+    .meta({
+        description:
+            "이 대화로 만든 문서들의 상태. 여러 개면 GENERATING > FAILED > PENDING_REVIEW > COMPLETED 순으로 하나",
+    });
 
 export const conversationListItemSchema = conversationSchema
     .extend({
@@ -84,7 +99,15 @@ export const conversationIdParamsSchema = z.object({
 
 export const conversationDetailSchema = conversationSchema
     .extend({
-        viewUrl: z.string().meta({ description: "원본 파일 Presigned URL (10분 유효)." }),
+        messages: z
+            .array(
+                z.object({
+                    sequence: z.number().int().meta({ example: 1 }),
+                    role: z.enum(["USER", "ASSISTANT"]),
+                    content: z.string().meta({ example: "JWT Refresh Token은 어디에 저장해야 해?" }),
+                }),
+            )
+            .meta({ description: "수집한 발화 (순서대로). 수집 전·실패면 빈 배열" }),
         documents: z
             .array(
                 z.object({
@@ -95,12 +118,13 @@ export const conversationDetailSchema = conversationSchema
                         .meta({ example: "JWT 인증 흐름 정리", description: "문서 제목 (채택 전 null)" }),
                 }),
             )
-            .meta({ description: "이 대화로 만든 문서 (삭제·NOT_KNOWLEDGE 제외, 최신순)" }),
+            .meta({ description: "이 대화로 만든 문서 (삭제 제외, 최신순)" }),
     })
     .meta({ id: "ConversationDetail" });
 
 export type ConversationResponse = z.infer<typeof conversationSchema>;
-export type UploadConversationsResponse = z.infer<typeof uploadConversationsResponseSchema>;
+export type CreateConversationBody = z.infer<typeof createConversationBodySchema>;
+export type CreateConversationResponse = z.infer<typeof createConversationResponseSchema>;
 export type ListConversationsQuery = z.infer<typeof listConversationsQuerySchema>;
 export type ConversationListItem = z.infer<typeof conversationListItemSchema>;
 export type ListConversationsResponse = z.infer<typeof listConversationsResponseSchema>;
