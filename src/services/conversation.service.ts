@@ -1,9 +1,7 @@
-import { randomUUID } from "node:crypto";
-import { rm } from "node:fs/promises";
 import type { Conversation } from "../generated/prisma/client.js";
 import { conversationRepository, type ConversationWithDocuments } from "../repositories/conversation.repository.js";
-import { CONVERSATION_FILE_EXT, type FailedFile } from "../middlewares/upload.js";
-import { deleteFile, getViewUrl, uploadFile } from "../utils/s3.js";
+import { collectSharedConversation, CollectError } from "../utils/collector.js";
+import { extractShareUrls } from "../utils/shareUrl.js";
 import { AppError } from "../utils/appError.js";
 import { logger } from "../utils/logger.js";
 import { toPageInfo } from "../schemas/common.schema.js";
@@ -11,21 +9,21 @@ import type {
     ConversationDetail,
     ConversationListItem,
     ConversationResponse,
+    CreateConversationBody,
+    CreateConversationResponse,
     ListConversationsQuery,
     ListConversationsResponse,
-    UploadConversationsResponse,
 } from "../schemas/conversation.schema.js";
 
-const CONTENT_TYPE = "application/json";
-
-function toConversationResponse(conversation: Conversation): ConversationResponse {
+function toConversationResponse(conversation: Conversation, messageCount: number): ConversationResponse {
     return {
         conversationId: Number(conversation.conversationId),
-        filename: conversation.filename,
-        contentType: conversation.contentType,
-        fileSize: Number(conversation.fileSize),
+        title: conversation.title,
+        shareUrl: conversation.shareUrl,
+        status: conversation.status,
+        collectFailReason: conversation.collectFailReason,
+        messageCount,
         createdAt: conversation.createdAt,
-        refinedAt: conversation.refinedAt,
     };
 }
 
@@ -65,45 +63,30 @@ function toGeneration({ documentConversations }: ConversationWithDocuments): Con
     };
 }
 
-function errorText(err: unknown) {
-    return err instanceof Error ? `${err.name}: ${err.message}` : String(err);
-}
-
-// 파일 하나를 S3에 올리고 conversations에 기록한다.
-// DB 기록에 실패하면 방금 올린 S3 파일을 지워서, 기록 없는 파일이 S3에 남지 않게 한다.
-async function saveOne(userId: number, file: Express.Multer.File): Promise<Conversation> {
-    // 같은 이름의 파일을 여러 번 올려도 겹치지 않게 키는 UUID로 만든다
-    const s3Key = `conversations/${userId}/${randomUUID()}${CONVERSATION_FILE_EXT}`;
+// 공유 페이지 수집 (뒤에서 실행). 끝나면 발화를 저장하고 COLLECTED, 실패하면 FAILED + 원인
+async function collect(conversationId: bigint, shareUrl: string) {
     try {
-        // 한글이 브라우저에서 깨지지 않게 S3에는 charset을 붙여 저장한다
-        await uploadFile({
-            key: s3Key,
-            filePath: file.path,
-            size: file.size,
-            contentType: `${CONTENT_TYPE}; charset=utf-8`,
-        });
+        const collected = await collectSharedConversation(shareUrl);
+        const saved = await conversationRepository.saveCollected(conversationId, collected);
+        if (saved.result === "SAVED")
+            logger.info(`공유 대화를 수집하였습니다. 발화 ${collected.messages.length}개`, { conversationId });
+        if (saved.result === "DUPLICATED") {
+            logger.info(
+                `이미 수집한 대화와 내용이 같아 저장하지 않았습니다. (기존 conversationId=${saved.duplicateOf})`,
+                { conversationId },
+            );
+        }
     } catch (err) {
-        logger.error("FILE_UPLOAD_FAILED", `'${file.originalname}' ${errorText(err)}`);
-        throw err;
-    }
-
-    try {
-        return await conversationRepository.create({
-            userId: BigInt(userId),
-            filename: file.originalname,
-            contentType: CONTENT_TYPE,
-            fileSize: BigInt(file.size),
-            s3Key,
-        });
-    } catch (err) {
-        logger.error(
-            "DATABASE_ERROR",
-            `'${file.originalname}' 대화 기록 실패: ${err instanceof Error ? err.name : String(err)}`,
-        );
-        await deleteFile(s3Key).catch((deleteErr) =>
-            logger.error("FILE_UPLOAD_FAILED", `S3 파일 삭제 실패 (${s3Key}): ${errorText(deleteErr)}`),
-        );
-        throw err;
+        const reason = err instanceof CollectError ? err.code : "COLLECT_ERROR";
+        const detail = err instanceof Error ? err.message : String(err);
+        if (err instanceof CollectError)
+            logger.error("CONVERSATION_COLLECT_FAILED", `${reason} ${detail}`, { conversationId });
+        else logger.error("DATABASE_ERROR", `수집 결과 저장 실패: ${detail.slice(0, 300)}`, { conversationId });
+        await conversationRepository
+            .markCollectFailed(conversationId, reason)
+            .catch((dbErr) =>
+                logger.error("DATABASE_ERROR", `수집 실패 저장 실패: ${(dbErr as Error).name}`, { conversationId }),
+            );
     }
 }
 
@@ -116,24 +99,43 @@ export const conversationService = {
         return {
             ...toPageInfo(page, limit, totalCount),
             conversations: conversations.map((conversation) => ({
-                ...toConversationResponse(conversation),
+                ...toConversationResponse(conversation, conversation._count.messages),
                 generation: toGeneration(conversation),
             })),
         };
     },
 
-    // 내용은 해석하지 않고 S3에 저장한 뒤 conversations에 기록만 한다 (분석은 문서를 만들 때 AI 서버가 함)
-    // 파일마다 따로 저장해서, 일부가 실패해도 성공한 파일은 그대로 남긴다
+    // 공유 링크를 등록하고 바로 응답한다. 수집(Chromium으로 공유 페이지 읽기)은 응답과 상관없이 뒤에서 한다(비동기).
+    // 프론트는 conversationId로 원본 대화 열람(CONV-03)을 폴링해서 status가 COLLECTING이 아니게 되면 결과를 보여 준다.
+    async create(userId: number, { url }: CreateConversationBody): Promise<CreateConversationResponse> {
+        const urls = extractShareUrls(url);
+        if (urls.length === 0) throw new AppError("INVALID_SHARE_URL");
+        if (urls.length > 1) {
+            throw new AppError("INVALID_SHARE_URL", {
+                message: "서로 다른 공유 링크가 여러 개입니다. 가져올 링크 하나만 입력해 주세요.",
+                details: { candidates: urls },
+            });
+        }
+        const [shareUrl] = urls;
+
+        // 중복 확인은 등록 때가 아니라 수집이 끝난 뒤 capture_id(내용 해시)로 한다.
+        // 같은 링크라도 대화가 이어져 내용이 늘었으면 새 대화로 저장해야 해서, 링크만 보고 막지 않는다
+        const conversation = await conversationRepository.create(BigInt(userId), shareUrl);
+        // await 하지 않는다: 수집은 수십 초 걸려서 사용자는 기다리지 않는다
+        void collect(conversation.conversationId, shareUrl);
+        return { conversationId: Number(conversation.conversationId), status: "COLLECTING" };
+    },
+
     // 다른 회원의 대화나 삭제한 대화도 없는 것과 똑같이 404로 응답한다 (있는지 여부를 알려 주지 않음)
     async get(userId: number, conversationId: number): Promise<ConversationDetail> {
-        const conversation = await conversationRepository.findByIdWithDocuments(BigInt(conversationId));
+        const conversation = await conversationRepository.findByIdWithDetail(BigInt(conversationId));
         if (!conversation || conversation.userId !== BigInt(userId) || conversation.deletedAt) {
             throw new AppError("CONVERSATION_NOT_FOUND");
         }
 
         return {
-            ...toConversationResponse(conversation),
-            viewUrl: await getViewUrl(conversation.s3Key, conversation.filename),
+            ...toConversationResponse(conversation, conversation.messages.length),
+            messages: conversation.messages,
             documents: conversation.documentConversations.map(({ document }) => ({
                 documentId: Number(document.documentId),
                 title: document.title,
@@ -141,7 +143,8 @@ export const conversationService = {
         };
     },
 
-    // 이 대화로 만든 문서는 지우지 않는다 (본문·프롬프트가 이미 저장돼 있어 편집·재생성도 계속 가능)
+    // 이 대화로 만든 문서는 지우지 않는다 (본문이 이미 저장돼 있어 편집도 계속 가능)
+    // 수집 중인 대화도 지울 수 있다 (수집이 끝나도 삭제한 대화에는 저장하지 않음)
     async delete(userId: number, conversationId: number): Promise<void> {
         const conversation = await conversationRepository.findByIdWithBlockingDocuments(BigInt(conversationId));
         if (!conversation || conversation.userId !== BigInt(userId) || conversation.deletedAt) {
@@ -155,34 +158,5 @@ export const conversationService = {
             });
         }
         await conversationRepository.softDelete(conversation.conversationId);
-    },
-
-    async upload(
-        userId: number,
-        files: Express.Multer.File[],
-        skipped: FailedFile[],
-    ): Promise<UploadConversationsResponse> {
-        try {
-            const results = await Promise.allSettled(files.map((file) => saveOne(userId, file)));
-
-            const conversations: ConversationResponse[] = [];
-            const failed: FailedFile[] = [...skipped];
-            results.forEach((result, i) => {
-                if (result.status === "fulfilled") conversations.push(toConversationResponse(result.value));
-                else
-                    failed.push({
-                        filename: files[i].originalname,
-                        code: "INTERNAL_SERVER_ERROR",
-                        message: "파일을 저장하지 못했습니다.",
-                    });
-            });
-
-            // 하나도 저장하지 못했으면 실패로 응답한다 (원인은 위에서 파일마다 로그로 남김)
-            if (conversations.length === 0) throw new AppError("INTERNAL_SERVER_ERROR", { details: { failed } });
-            return { conversations, failed };
-        } finally {
-            // 임시 폴더에 받은 파일은 성공·실패와 상관없이 지운다
-            await Promise.all(files.map((file) => rm(file.path, { force: true })));
-        }
     },
 };

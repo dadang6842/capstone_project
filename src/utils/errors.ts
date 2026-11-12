@@ -39,25 +39,18 @@ export const ERRORS = {
         message: "현재 비밀번호가 올바르지 않습니다.",
     },
 
-    // 대화·파일
-    FILE_REQUIRED: { no: 3001, title: "파일 미첨부", status: 400, message: "파일을 첨부해 주세요." },
-    FILE_TOO_LARGE: {
-        no: 3002,
-        title: "파일 크기 초과 (파일당 50MB)",
-        status: 413,
-        message: "파일은 50MB까지 올릴 수 있습니다.",
-    },
-    FILE_COUNT_EXCEEDED: {
-        no: 3003,
-        title: "업로드 개수 초과 (요청당 20개)",
+    // 대화
+    INVALID_SHARE_URL: {
+        no: 3001,
+        title: "공유 링크 형식 오류",
         status: 400,
-        message: "한 번에 20개까지 올릴 수 있습니다.",
+        message: "https://chatgpt.com/share/... 형태의 공유 링크를 입력해 주세요.",
     },
-    UNSUPPORTED_FILE_TYPE: {
-        no: 3004,
-        title: "지원하지 않는 파일 형식",
-        status: 415,
-        message: "JSON 파일만 올릴 수 있습니다.",
+    CONVERSATION_NOT_COLLECTED: {
+        no: 3003,
+        title: "수집이 끝나지 않은 대화",
+        status: 409,
+        message: "수집이 끝난 대화만 문서 생성에 쓸 수 있습니다.",
     },
     CONVERSATION_NOT_FOUND: { no: 3006, title: "대화 없음", status: 404, message: "대화를 찾을 수 없습니다." },
     CONVERSATION_IN_USE: {
@@ -91,26 +84,17 @@ export const ERRORS = {
         status: 409,
         message: "최종 채택 전인 문서는 편집할 수 없습니다.",
     },
-
-    // AI 서버 연동
-    INVALID_INTERNAL_KEY: {
-        no: 7001,
-        title: "서버 간 인증 키 불일치",
-        status: 401,
-        message: "AI 서버 인증 키가 올바르지 않습니다.",
-    },
 } as const satisfies Record<string, { no: number; title: string; status: number; message: string }>;
 
 export type ErrorCode = keyof typeof ERRORS;
 
-// 클라이언트 응답으로는 나가지 않고 로그에만 남기는 서버 내부 오류
+// 클라이언트 응답으로는 나가지 않고 로그에만 남기는 서버 내부 오류 (설계서 에러 코드 표 기준)
+// 예: logger.error("AI_SERVER_REQUEST_FAILED", "300000ms 안에 응답이 없음", { documentId, draftId })
 export const INTERNAL_ERRORS = {
-    FILE_UPLOAD_FAILED: { no: 3005, title: "S3 파일 저장 실패" },
-    AI_SERVER_REQUEST_FAILED: { no: 7002, title: "AI 서버 요청 전송 실패" },
-    AI_ANALYSIS_FAILED: { no: 7003, title: "AI 서버 대화 분석 실패" },
-    GPT_REQUEST_FAILED: { no: 7004, title: "GPT 호출 실패" },
-    GPT_INVALID_RESPONSE: { no: 7005, title: "GPT 응답 형식 불일치" },
-    AI_REVISION_FAILED: { no: 7006, title: "AI 서버 수정본 생성 실패" },
+    CONVERSATION_COLLECT_FAILED: { no: 3004, title: "공유 대화 수집 실패" },
+    AI_SERVER_REQUEST_FAILED: { no: 7002, title: "AI 서버 요청 실패 (연결 실패·시간 초과·HTTP 에러)" },
+    AI_GENERATION_FAILED: { no: 7003, title: "AI 서버 초안 생성 실패 응답" },
+    AI_INVALID_RESPONSE: { no: 7005, title: "AI 서버 응답 형식 불일치" },
     DATABASE_ERROR: { no: 8001, title: "DB 처리 실패" },
     WITHDRAWAL_PURGE_FAILED: { no: 8002, title: "탈퇴 회원 영구 삭제 실패" },
 } as const satisfies Record<string, { no: number; title: string }>;

@@ -1,3 +1,11 @@
+// =====================================================================
+// 생성형 AI 대화기록 기반 개인 기록 자산화 서비스 - ERD v3 (Prisma 7 / MySQL 8.0)
+// 규칙
+//  - 테이블/컬럼명은 DB에서 snake_case(@@map/@map), 코드에서는 camelCase
+//  - 모든 PK는 <테이블 단수>_id BIGINT UNSIGNED AUTO_INCREMENT
+//  - 접속 URL은 prisma.config.ts에서 DATABASE_URL 환경변수로 설정
+// =====================================================================
+
 generator client {
   provider = "prisma-client"
   output   = "../src/generated/prisma"
@@ -51,34 +59,70 @@ model RefreshToken {
 }
 
 // ---------------------------------------------------------------------
-// 2. 대화 (사용자가 올린 AI 대화 내보내기 파일 1개 = 대화 1개)
-//    백엔드는 파일을 해석하지 않고 S3에 보관. 원본 열람은 Presigned URL로 파일 자체를 보여 줌
+// 2. 대화 (사용자가 입력한 ChatGPT 공유 링크 1개 = 대화 1개)
+//    공유 링크를 받으면 행을 COLLECTING으로 만들고, 수집 모듈(Python + Playwright)이 뒤에서 발화를 긁어 와 conversation_messages에 저장
 // ---------------------------------------------------------------------
 
+enum ConversationStatus {
+  COLLECTING // 공유 페이지에서 발화를 수집하는 중
+  COLLECTED // 수집 완료. 문서 생성에 쓸 수 있음
+  FAILED // 수집 실패 (collect_fail_reason). 삭제 후 링크를 다시 입력
+}
+
+/// 수집 실패 원인 (화면 안내 문구는 프론트에서 관리)
+enum CollectFailReason {
+  NOT_ACCESSIBLE // 공유 페이지에 접근하지 못함 (삭제·비공개 링크, 접근 제한, 페이지 로딩 실패)
+  UNSUPPORTED_CONTENT // 수집할 수 없는 화면 구조 (이미지 전용 발화, 발화 ID 없음 등)
+  TIMEOUT // 제한 시간 안에 끝나지 않음, 또는 수집 중 서버가 재시작됨
+  COLLECT_ERROR // 그 밖의 오류 (브라우저 실행 실패 등)
+  DUPLICATED // 이미 수집한 대화와 내용이 같음 (같은 capture_id)
+}
+
 model Conversation {
-  conversationId BigInt    @id @default(autoincrement()) @map("conversation_id") @db.UnsignedBigInt
-  userId         BigInt    @map("user_id") @db.UnsignedBigInt
-  filename       String    @db.VarChar(255) /// 원본 파일명
-  contentType    String?   @map("content_type") @db.VarChar(100)
-  fileSize       BigInt    @map("file_size") @db.UnsignedBigInt /// bytes
-  s3Key          String    @map("s3_key") @db.VarChar(512) /// 정리되면 정리본 파일 키로 바뀜 (원본은 지움)
-  refinedAt      DateTime? @map("refined_at") @db.DateTime(3) /// AI가 반복·불필요한 내용을 지워 정리한 일시. NULL이면 올린 원본 그대로
-  createdAt      DateTime  @default(now()) @map("created_at") @db.DateTime(3)
-  deletedAt      DateTime? @map("deleted_at") @db.DateTime(3) /// 대화 삭제(소프트). S3 파일은 배치로 정리
+  conversationId    BigInt             @id @default(autoincrement()) @map("conversation_id") @db.UnsignedBigInt
+  userId            BigInt             @map("user_id") @db.UnsignedBigInt
+  shareUrl          String             @map("share_url") @db.VarChar(255) /// 정규화한 공유 링크 (https://chatgpt.com/share/<UUID 소문자>)
+  captureId         String?            @map("capture_id") @db.VarChar(80) /// 수집 모듈이 준 내용 해시 (share_ + SHA-256). 링크·내용이 같으면 같은 값. 중복 확인용, 수집 전 NULL
+  title             String?            @db.VarChar(255) /// 공유 페이지 제목. 수집 전·실패면 NULL
+  status            ConversationStatus @default(COLLECTING)
+  collectFailReason CollectFailReason? @map("collect_fail_reason") /// FAILED일 때만
+  createdAt         DateTime           @default(now()) @map("created_at") @db.DateTime(3) /// 링크 입력(등록) 일시
+  deletedAt         DateTime?          @map("deleted_at") @db.DateTime(3) /// 대화 삭제(소프트)
 
   user                  User                   @relation(fields: [userId], references: [userId], onDelete: Cascade, map: "fk_conversations_user")
+  messages              ConversationMessage[]
   documentConversations DocumentConversation[]
 
   @@index([userId, deletedAt, createdAt], map: "idx_conversations_user")
+  @@index([userId, captureId], map: "idx_conversations_capture") // 같은 내용 중복 수집 확인
   @@map("conversations")
+}
+
+enum MessageRole {
+  USER
+  ASSISTANT
+}
+
+/// 공유 페이지에서 수집한 발화 1개 = 1행. 화면에 보이는 텍스트(추천 질문 영역 제외)만 저장
+model ConversationMessage {
+  conversationMessageId BigInt      @id @default(autoincrement()) @map("conversation_message_id") @db.UnsignedBigInt
+  conversationId        BigInt      @map("conversation_id") @db.UnsignedBigInt
+  sequence              Int         @db.UnsignedInt /// 대화 안 순서 (1부터)
+  role                  MessageRole
+  content               String      @db.MediumText /// 발화 본문 (코드 블록 포함 화면 텍스트)
+  sourceMessageId       String      @map("source_message_id") @db.VarChar(100) /// 공유 페이지의 메시지 ID. AI 서버가 출처를 가리킬 때 사용
+
+  conversation Conversation @relation(fields: [conversationId], references: [conversationId], onDelete: Cascade, map: "fk_conversation_messages_conversation")
+
+  @@unique([conversationId, sequence], map: "uk_conversation_messages_sequence")
+  @@map("conversation_messages")
 }
 
 // ---------------------------------------------------------------------
 // 3. 문서 (대시보드 = 사용자의 documents 목록)
 // ---------------------------------------------------------------------
 
-/// 지식 유형
-/// 어느 유형에도 들지 않는 대화는 문서를 만들지 않고 대화 파일을 정리해 대화 목록에 돌려줌 (documents.status NOT_KNOWLEDGE)
+/// 지식 유형 (다현 결정 2026-10-16). AI 서버 분류 결과와 GPT 응답 JSON의 category 값.
 enum Category {
   IDEA_NOTE // 아이디어 노트: 하나의 아이디어를 중심으로 배경과 구체적인 내용
   CONCEPT_NOTE // 개념·용어 노트: 정의, 원리, 예시
@@ -87,11 +131,10 @@ enum Category {
 }
 
 enum DocumentStatus {
-  GENERATING // 첫 초안 생성 중 (AI 서버 분석 + GPT 호출. prompt가 NULL이면 분석 단계)
+  GENERATING // 첫 초안 생성 중 (AI 서버 응답 대기)
   DRAFT_GENERATED // 초안 생성 완료, 검토 중 (AI 보완 중에도 유지)
   FINALIZED // 초안 채택 완료, 편집 가능
   FAILED // 첫 초안 생성 실패 (재시도)
-  NOT_KNOWLEDGE // 지식 유형에 들지 않아 문서를 만들지 않음. 대화 파일은 정리돼 대화 목록에 남음 (끝난 상태)
 }
 
 model Document {
@@ -101,7 +144,6 @@ model Document {
   content      String?        @db.LongText
   summary      String?        @db.VarChar(512)
   category     Category?
-  prompt       String?        @db.MediumText /// AI 서버가 돌려준 첫 초안용 GPT 프롬프트. 첫 초안 GPT 호출이 실패하면 AI 서버를 다시 부르지 않고 재사용. NULL이면 분석 전/분석 실패
   status       DocumentStatus @default(GENERATING)
   finalizedAt  DateTime?      @map("finalized_at") @db.DateTime(3) /// 최종 채택 일시. 관리자 초안 검토 현황(채택률·평균 초안 수)의 기준일
   lastViewedAt DateTime       @default(now()) @map("last_viewed_at") @db.DateTime(3)
@@ -119,7 +161,7 @@ model Document {
   @@index([createdAt], map: "idx_documents_created") // 관리자 지표: 기간별 문서 생성 수
   @@index([finalizedAt], map: "idx_documents_finalized") // 관리자 지표: 최종 채택일 기준 집계
   // 한글 검색용 FULLTEXT. Prisma 스키마로는 ngram 파서를 지정할 수 없어서
-  // 마이그레이션 SQL에서 WITH PARSER ngram을 직접 붙임
+  // 마이그레이션 SQL에서 WITH PARSER ngram을 직접 붙임 (ERD.md 참고)
   @@fulltext([title, content], map: "ftx_documents_search")
   @@map("documents")
 }
@@ -160,16 +202,14 @@ enum DraftStatus {
   GENERATED
   ACCEPTED
   FAILED
-  NOT_KNOWLEDGE // 첫 초안 분석 결과 지식 유형에 들지 않음 (실패 아님, 재시도 없음). 문서도 NOT_KNOWLEDGE
 }
 
 /// 생성 실패 원인 (관리자 실패 목록)
 enum FailReason {
-  ANALYSIS_FAILED // AI 서버가 대화 분석 실패로 응답 (첫 초안)
-  GPT_FAILED // 백엔드의 GPT 호출 오류 (첫 초안)
-  REVISION_FAILED // AI 서버가 보완 실패로 응답
+  GENERATION_FAILED // 첫 초안: AI 서버 요청 실패 또는 AI 서버가 실패로 응답
+  REVISION_FAILED // AI 보완: AI 서버 요청 실패 또는 AI 서버가 실패로 응답
   INVALID_RESPONSE // 응답 JSON 형식이 맞지 않음 (zod 검증 실패)
-  TIMEOUT // 응답이 오지 않아 배치가 실패 처리
+  TIMEOUT // 제한 시간 안에 응답이 없음, 또는 기다리는 중 서버가 재시작됨
 }
 
 /// 초안 생성 시도 1번 = 1행. 첫 초안, AI 보완, 실패 후 재시도 모두 새 행을 만든다.
@@ -187,7 +227,7 @@ model Draft {
   keywords      Json?
   status        DraftStatus @default(GENERATING)
   failReason    FailReason? @map("fail_reason") /// FAILED일 때만
-  errorMessage  String?     @map("error_message") @db.VarChar(1000) /// AI 서버·OpenAI가 준 에러 메시지 (FAILED일 때만, 길면 잘라서 저장)
+  errorMessage  String?     @map("error_message") @db.VarChar(1000) /// AI 서버 요청 실패 내용이나 AI 서버가 준 에러 메시지 (FAILED일 때만, 길면 잘라서 저장)
   createdAt     DateTime    @default(now()) @map("created_at") @db.DateTime(3) /// 생성 요청(시도 시작) 일시
 
   document  Document        @relation(fields: [documentId], references: [documentId], onDelete: Cascade, map: "fk_drafts_document")
@@ -201,7 +241,7 @@ model Draft {
   @@map("drafts")
 }
 
-/// AI 보완 요청 패널(P04)의 보완 항목
+/// AI 보완 요청 패널(P04)의 보완 항목 (화면 문구는 프론트에서 관리)
 enum FeedbackReason {
   TOO_LONG // 분량 줄이기
   MISSING_CONTENT // 누락 내용 보완 (연결 원문이 모두 삭제됐으면 선택 불가)

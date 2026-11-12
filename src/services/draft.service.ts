@@ -1,8 +1,8 @@
-import type { Conversation, Draft } from "../generated/prisma/client.js";
+import type { Draft } from "../generated/prisma/client.js";
+import type { ConversationWithMessages } from "../repositories/conversation.repository.js";
 import { draftRepository } from "../repositories/draft.repository.js";
-import { sendAnalysisRequest } from "./document.service.js";
-import { requestRevision } from "../utils/aiServer.js";
-import { getViewUrl } from "../utils/s3.js";
+import { describeAiError, sendAnalysisRequest } from "./document.service.js";
+import { requestRevision, toAnalysisConversation } from "../utils/aiServer.js";
 import { AppError } from "../utils/appError.js";
 import { logger } from "../utils/logger.js";
 import type {
@@ -34,16 +34,17 @@ async function findEditableDraft(userId: number, draftId: number) {
     return draft;
 }
 
-// AI-03: 기준 회차와 보완 항목, 남아 있는 원본 대화(Presigned URL)를 AI 서버로 보낸다. AI 보완 요청(DRAFT-04)에서 쓴다.
-// 보내지 못하면 새 회차를 실패로 바꿔서 A05-2에 '보완 실패'와 '다시 시도'가 보이게 한다.
+// AI-03: 기준 회차와 보완 항목, 남아 있는 원본 대화(발화)를 AI 서버로 보내고, 응답으로 받은 새 회차를 저장한다.
+// AI 보완 요청(DRAFT-04)과 보완 재시도(DRAFT-05)에서 쓴다. 호출하는 쪽은 await 하지 않는다.
+// 실패하면 새 회차를 FAILED로 바꿔서 A05-2에 '보완 실패'와 '다시 시도'가 보이게 한다.
 export async function sendRevisionRequest(
     draftId: bigint,
     base: Draft,
     reasons: string[],
-    conversations: Conversation[],
+    conversations: ConversationWithMessages[],
 ) {
     try {
-        await requestRevision(
+        const result = await requestRevision(
             Number(draftId),
             {
                 title: base.title,
@@ -53,25 +54,44 @@ export async function sendRevisionRequest(
                 content: base.content,
             },
             reasons,
-            await Promise.all(
-                conversations.map(async (conversation) => ({
-                    conversationId: Number(conversation.conversationId),
-                    url: await getViewUrl(conversation.s3Key, conversation.filename),
-                    filename: conversation.filename,
-                    contentType: conversation.contentType,
-                })),
-            ),
+            conversations.map(toAnalysisConversation),
         );
-        logger.info("AI 서버에 보완을 요청하였습니다.", { draftId, baseDraftId: base.draftId });
+        if (await draftRepository.saveRevisionResult(draftId, result)) {
+            logger.info("AI 보완 초안을 생성하였습니다.", { draftId, baseDraftId: base.draftId });
+        }
     } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        logger.error("AI_SERVER_REQUEST_FAILED", message, { draftId });
+        const { failReason, logCode, message } = describeAiError(err, "REVISION_FAILED");
+        logger.error(logCode, message, { draftId });
         await draftRepository
-            .markRevisionFailed(draftId, `AI 서버 요청 실패: ${message}`)
+            .markRevisionFailed(draftId, failReason, message)
             .catch((dbErr) =>
                 logger.error("DATABASE_ERROR", `실패 처리 저장 실패: ${(dbErr as Error).name}`, { draftId }),
             );
     }
+}
+
+// 보완 재시도(A05-2 보완 실패의 '다시 시도'): 실패한 회차와 같은 번호·기준 회차·보완 항목으로 새 행을 만들고 AI-03을 다시 보낸다.
+// 기준 회차는 지금 저장된 내용을 쓴다(실패 뒤 직접 수정했다면 수정본). 보완 요청(DRAFT-04)과 같은 조건을 확인한다.
+async function retryRevision(
+    draft: NonNullable<Awaited<ReturnType<typeof draftRepository.findForRetry>>>,
+    conversations: ConversationWithMessages[],
+): Promise<RetryDraftResponse> {
+    const { parent, document } = draft;
+    if (!parent || parent.status !== "GENERATED" || document.status !== "DRAFT_GENERATED")
+        throw new AppError("INVALID_DRAFT_STATUS");
+
+    const reasons = draft.feedbacks.map(({ reason }) => reason);
+    if (reasons.includes("MISSING_CONTENT") && conversations.length === 0) {
+        throw new AppError("SOURCES_DELETED", {
+            message: "원본 대화가 모두 삭제되어 누락 내용 보완을 다시 요청할 수 없습니다.",
+        });
+    }
+
+    const created = await draftRepository.createRevision(draft.documentId, parent.draftId, reasons, draft.versionNo);
+    if (!created) throw new AppError("REVISION_IN_PROGRESS");
+
+    void sendRevisionRequest(created.draftId, parent, reasons, conversations);
+    return { draftId: Number(created.draftId), status: "GENERATING" };
 }
 
 export const draftService = {
@@ -100,33 +120,30 @@ export const draftService = {
             revising: document.drafts.length > 0,
             conversations: document.sources.map(({ conversation }) => ({
                 conversationId: Number(conversation.conversationId),
-                filename: conversation.filename,
+                title: conversation.title,
                 deleted: conversation.deletedAt !== null,
             })),
         };
     },
 
     // 실패한 초안을 같은 조건으로 다시 요청한다. 실패한 행은 남기고 같은 회차의 새 행을 만들어 바로 응답한다.
-    // 첫 초안(1회차)은 AI-01부터 다시 보낸다. AI 보완 회차(2회차 이상)는 AI-03을 만들 때 추가한다.
+    // 첫 초안(1회차)은 AI-01부터, AI 보완 회차(2회차 이상)는 같은 기준 회차·보완 항목으로 AI-03을 다시 보낸다.
     async retry(userId: number, draftId: number): Promise<RetryDraftResponse> {
         const draft = await draftRepository.findForRetry(BigInt(draftId));
         if (!draft || draft.document.userId !== BigInt(userId) || draft.document.deletedAt) {
             throw new AppError("DRAFT_NOT_FOUND");
         }
 
-        // 남아 있는 대화로만 다시 분석한다. 실패한 문서의 대화는 삭제할 수 있어서(CONV-04) 모두 없으면 다시 생성할 수 없다
+        // 실패한 초안만, 그리고 그 회차의 가장 최근 시도만 (이미 재시도했으면 새 행으로 다시 시도해야 함)
         if (
             draft.status !== "FAILED" ||
             (await draftRepository.hasNewerAttempt(draft.documentId, draft.versionNo, draft.draftId))
         ) {
             throw new AppError("INVALID_DRAFT_STATUS");
         }
-        if (draft.versionNo > 1) {
-            throw new AppError("INVALID_DRAFT_STATUS", { message: "AI 보완 회차 재시도는 아직 지원하지 않습니다." });
-        }
-
-        // 실패한 문서가 쓰는 대화는 삭제가 막혀 있어서(CONV-04) 보통 남아 있지만, 모두 없으면 다시 분석할 수 없다
+        // 남아 있는 대화로만 다시 분석한다. 실패한 문서의 대화는 삭제할 수 있어서(CONV-04) 모두 없으면 다시 생성할 수 없다
         const conversations = draft.document.sources.map(({ conversation }) => conversation);
+        if (draft.versionNo > 1) return retryRevision(draft, conversations);
         if (conversations.length === 0)
             throw new AppError("SOURCES_DELETED", { message: "원본 대화가 모두 삭제되어 다시 생성할 수 없습니다." });
 
@@ -140,7 +157,7 @@ export const draftService = {
     },
 
     // 고른 회차를 기준으로 AI 보완(새 회차)을 요청한다. 기준 회차는 저장된 내용(직접 수정했다면 수정본) 그대로 쓰고 GENERATED로 남는다.
-    // 새 회차를 GENERATING으로 만들고 바로 응답하며, AI 서버 요청(AI-03)은 뒤에서 보낸다. 결과는 AI-04 콜백으로 받는다.
+    // 새 회차를 GENERATING으로 만들고 바로 응답하며, AI 서버 요청(AI-03)은 뒤에서 보낸다. AI 서버가 응답으로 새 회차를 주면 저장한다.
     async requestRevision(
         userId: number,
         draftId: number,

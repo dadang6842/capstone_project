@@ -1,5 +1,6 @@
 import { prisma } from "../config/prisma.js";
-import type { Category, Prisma } from "../generated/prisma/client.js";
+import type { Category, FailReason, Prisma } from "../generated/prisma/client.js";
+import type { DraftResult } from "../utils/aiServer.js";
 
 // drafts.error_message가 VARCHAR(1000)
 const ERROR_MESSAGE_MAX = 1000;
@@ -104,7 +105,7 @@ export const documentRepository = {
                 keywords: { orderBy: { documentKeywordId: "asc" }, select: { keyword: true } },
                 sources: {
                     orderBy: { conversationId: "asc" },
-                    select: { conversation: { select: { conversationId: true, filename: true, deletedAt: true } } },
+                    select: { conversation: { select: { conversationId: true, title: true, deletedAt: true } } },
                 },
             },
         });
@@ -173,8 +174,25 @@ export const documentRepository = {
         });
     },
 
+    // 첫 초안 생성 완료(AI-01 응답): 초안에 결과를 저장하고 GENERATED, 문서 DRAFT_GENERATED.
+    // 기다리는 사이 상태가 바뀌었으면(서버 재시작으로 실패 처리됨 등) 저장하지 않는다 (false)
+    saveFirstDraftResult(documentId: bigint, draftId: bigint, result: DraftResult) {
+        return prisma.$transaction(async (tx) => {
+            const { count } = await tx.draft.updateMany({
+                where: { draftId, status: "GENERATING" },
+                data: { ...result, status: "GENERATED" },
+            });
+            if (count === 0) return false;
+            await tx.document.updateMany({
+                where: { documentId, status: "GENERATING" },
+                data: { status: "DRAFT_GENERATED" },
+            });
+            return true;
+        });
+    },
+
     // 첫 초안 생성 실패: 초안 FAILED(원인 기록) + 문서 FAILED
-    markFirstDraftFailed(documentId: bigint, draftId: bigint, failReason: "ANALYSIS_FAILED", errorMessage: string) {
+    markFirstDraftFailed(documentId: bigint, draftId: bigint, failReason: FailReason, errorMessage: string) {
         return prisma.$transaction([
             prisma.draft.update({
                 where: { draftId },

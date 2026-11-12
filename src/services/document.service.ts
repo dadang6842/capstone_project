@@ -1,8 +1,6 @@
-import type { Conversation } from "../generated/prisma/client.js";
-import { conversationRepository } from "../repositories/conversation.repository.js";
+import { conversationRepository, type ConversationWithMessages } from "../repositories/conversation.repository.js";
 import { documentRepository } from "../repositories/document.repository.js";
-import { requestAnalysis } from "../utils/aiServer.js";
-import { getViewUrl } from "../utils/s3.js";
+import { AiServerError, requestAnalysis, toAnalysisConversation } from "../utils/aiServer.js";
 import { AppError } from "../utils/appError.js";
 import { logger } from "../utils/logger.js";
 import { toPageInfo } from "../schemas/common.schema.js";
@@ -18,27 +16,41 @@ import type {
     UpdateDocumentResponse,
 } from "../schemas/document.schema.js";
 
-// AI-01: 고른 대화의 원본 Presigned URL을 AI 서버로 보낸다. 문서 생성 요청(DRAFT-01)과 첫 초안 재시도(DRAFT-05)에서 쓴다.
-// 보내지 못하면(주소 미설정, 연결 실패, 에러 응답) 첫 초안을 실패로 바꿔서 사용자가 '다시 시도'(DRAFT-05)할 수 있게 한다.
-export async function sendAnalysisRequest(documentId: bigint, draftId: bigint, conversations: Conversation[]) {
+// AI 서버 오류를 초안 fail_reason과 로그 코드로 바꾼다 (AI-01·AI-03 공용)
+export function describeAiError(err: unknown, generationFailReason: "GENERATION_FAILED" | "REVISION_FAILED") {
+    const message = err instanceof Error ? err.message : String(err);
+    if (!(err instanceof AiServerError))
+        return { failReason: generationFailReason, logCode: "AI_SERVER_REQUEST_FAILED" as const, message };
+    switch (err.kind) {
+        case "TIMEOUT":
+            return { failReason: "TIMEOUT" as const, logCode: "AI_SERVER_REQUEST_FAILED" as const, message };
+        case "INVALID_RESPONSE":
+            return { failReason: "INVALID_RESPONSE" as const, logCode: "AI_INVALID_RESPONSE" as const, message };
+        case "GENERATION_FAILED":
+            return { failReason: generationFailReason, logCode: "AI_GENERATION_FAILED" as const, message };
+        default:
+            return { failReason: generationFailReason, logCode: "AI_SERVER_REQUEST_FAILED" as const, message };
+    }
+}
+
+// AI-01: 고른 대화의 발화를 AI 서버로 보내고, 응답으로 받은 첫 초안을 저장한다. 문서 생성 요청(DRAFT-01)과 첫 초안 재시도(DRAFT-05)에서 쓴다.
+// AI 서버가 GPT로 초안을 만드는 동안(수십 초~수 분) 기다리므로 호출하는 쪽은 await 하지 않는다.
+// 실패하면(요청 실패, 시간 초과, AI 서버 실패 응답, 형식 오류) 첫 초안·문서를 FAILED로 바꿔서 '다시 시도'(DRAFT-05)할 수 있게 한다.
+export async function sendAnalysisRequest(
+    documentId: bigint,
+    draftId: bigint,
+    conversations: ConversationWithMessages[],
+) {
     try {
-        await requestAnalysis(
-            Number(documentId),
-            await Promise.all(
-                conversations.map(async (conversation) => ({
-                    conversationId: Number(conversation.conversationId),
-                    url: await getViewUrl(conversation.s3Key, conversation.filename),
-                    filename: conversation.filename,
-                    contentType: conversation.contentType,
-                })),
-            ),
-        );
-        logger.info("AI 서버에 대화 분석을 요청하였습니다.", { documentId, draftId });
+        const result = await requestAnalysis(Number(documentId), conversations.map(toAnalysisConversation));
+        if (await documentRepository.saveFirstDraftResult(documentId, draftId, result)) {
+            logger.info("첫 초안을 생성하였습니다.", { documentId, draftId });
+        }
     } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        logger.error("AI_SERVER_REQUEST_FAILED", message, { documentId, draftId });
+        const { failReason, logCode, message } = describeAiError(err, "GENERATION_FAILED");
+        logger.error(logCode, message, { documentId, draftId });
         await documentRepository
-            .markFirstDraftFailed(documentId, draftId, "ANALYSIS_FAILED", `AI 서버 요청 실패: ${message}`)
+            .markFirstDraftFailed(documentId, draftId, failReason, message)
             .catch((dbErr) =>
                 logger.error("DATABASE_ERROR", `실패 처리 저장 실패: ${(dbErr as Error).name}`, { documentId }),
             );
@@ -47,7 +59,7 @@ export async function sendAnalysisRequest(documentId: bigint, draftId: bigint, c
 
 export const documentService = {
     // 문서와 1회차 초안을 GENERATING으로 만들고 바로 응답한다. AI 서버 요청은 응답과 상관없이 뒤에서 보낸다(비동기).
-    // 이후 AI 서버가 결과를 돌려주면(AI-02) 초안을 채운다. 프론트는 draftId로 초안 조회(DRAFT-02)를 폴링한다.
+    // AI 서버가 응답으로 초안을 주면 초안을 채운다. 프론트는 draftId로 초안 조회(DRAFT-02)를 폴링한다.
     async create(userId: number, { conversationIds }: CreateDocumentBody): Promise<CreateDocumentResponse> {
         const ids = conversationIds.map(BigInt);
 
@@ -57,6 +69,14 @@ export const documentService = {
             const found = new Set(conversations.map((conversation) => Number(conversation.conversationId)));
             throw new AppError("CONVERSATION_NOT_FOUND", {
                 details: { conversationIds: conversationIds.filter((id) => !found.has(id)) },
+            });
+        }
+
+        // 수집이 끝나지 않은(수집 중·실패) 대화가 섞여 있으면 409
+        const notCollected = conversations.filter((conversation) => conversation.status !== "COLLECTED");
+        if (notCollected.length > 0) {
+            throw new AppError("CONVERSATION_NOT_COLLECTED", {
+                details: { conversationIds: notCollected.map((conversation) => Number(conversation.conversationId)) },
             });
         }
 
@@ -111,7 +131,7 @@ export const documentService = {
             keywords: document.keywords.map(({ keyword }) => keyword),
             conversations: document.sources.map(({ conversation }) => ({
                 conversationId: Number(conversation.conversationId),
-                filename: conversation.filename,
+                title: conversation.title,
                 deleted: conversation.deletedAt !== null,
             })),
             createdAt: document.createdAt,

@@ -1,16 +1,15 @@
 import { Router } from "express";
 import { z } from "zod";
 import { authenticate } from "../middlewares/authenticate.js";
-import { uploadConversationFiles } from "../middlewares/upload.js";
 import { conversationController } from "../controllers/conversation.controller.js";
 import { validate } from "../middlewares/validate.js";
 import {
     conversationDetailSchema,
     conversationIdParamsSchema,
     listConversationsQuerySchema,
+    createConversationBodySchema,
+    createConversationResponseSchema,
     listConversationsResponseSchema,
-    uploadConversationsBodySchema,
-    uploadConversationsResponseSchema,
 } from "../schemas/conversation.schema.js";
 import { successResponse } from "../schemas/common.schema.js";
 import { registry, errorResponses, bearerAuth } from "../docs/openapi.js";
@@ -21,33 +20,22 @@ registry.registerPath({
     method: "post",
     path: "/conversations",
     tags: ["Conversation"],
-    summary: "대화 가져오기 (CONV-01)",
+    summary: "대화 가져오기 - 공유 링크 등록 (CONV-01)",
     description:
-        "ChatGPT·Claude에서 내보낸 대화 JSON 파일을 올린다. 파일 1개가 대화 1개가 된다. JSON만(확장자로 확인), 요청당 1~20개, 파일당 50MB. " +
-        "내용은 해석하지 않고 S3에 저장한 뒤 기록만 한다. 파일마다 따로 저장해서, JSON이 아니거나 저장에 실패한 파일은 failed로 알려 주고 나머지는 저장한다. " +
-        "개수·크기 초과는 요청 전체를 거절한다. 하나도 저장하지 못하면 에러로 응답하고 details.failed에 파일별 이유를 준다.",
+        "화면: A03 → P01 대화 등록. ChatGPT 공유 링크(문장 속 링크도 가능)를 받아 대화를 COLLECTING으로 만들고 바로 202로 응답한다. " +
+        "수집은 서버가 뒤에서 하며, 프론트는 받은 conversationId로 원본 대화 열람(CONV-03)을 폴링해 COLLECTED·FAILED를 확인한다. " +
+        "이미 수집한 대화와 내용이 같으면(capture_id) FAILED·collectFailReason DUPLICATED가 된다.",
     security: bearerAuth,
-    request: {
-        body: { required: true, content: { "multipart/form-data": { schema: uploadConversationsBodySchema } } },
-    },
+    request: { body: { required: true, content: { "application/json": { schema: createConversationBodySchema } } } },
     responses: {
-        201: {
-            description: "1개 이상 저장됨 (저장 못 한 파일은 failed)",
-            content: { "application/json": { schema: successResponse(uploadConversationsResponseSchema) } },
+        202: {
+            description: "등록됨, 수집 시작",
+            content: { "application/json": { schema: successResponse(createConversationResponseSchema) } },
         },
-        ...errorResponses(
-            "FILE_REQUIRED",
-            "FILE_COUNT_EXCEEDED",
-            "UNAUTHORIZED",
-            "TOKEN_EXPIRED",
-            "FILE_TOO_LARGE",
-            "UNSUPPORTED_FILE_TYPE",
-            "INTERNAL_SERVER_ERROR",
-        ),
+        ...errorResponses("VALIDATION_ERROR", "INVALID_SHARE_URL", "UNAUTHORIZED", "TOKEN_EXPIRED"),
     },
 });
-// 로그인 확인을 먼저 해서, 로그인하지 않은 요청은 파일을 받기 전에 끊는다
-router.post("/", authenticate, uploadConversationFiles, conversationController.upload);
+router.post("/", authenticate, validate({ body: createConversationBodySchema }), conversationController.create);
 
 registry.registerPath({
     method: "get",
@@ -55,7 +43,7 @@ registry.registerPath({
     tags: ["Conversation"],
     summary: "대화 목록 조회 (CONV-02)",
     description:
-        "대화 목록(A03)과 문서 생성의 분석 대상 선택(A04)에 쓴다. 등록일 최신순. 대화마다 이 대화로 만든 문서의 생성 결과(generation)를 같이 준다. " +
+        "화면: A03 대화 목록, A04 분석 대상 선택. 등록일 최신순이며 수집 중·실패한 대화도 status와 함께 준다(A04에서는 COLLECTED만 고를 수 있게). 대화마다 이 대화로 만든 문서의 생성 결과(generation)를 같이 준다. " +
         "pendingDocuments는 미채택 문서 목록으로, 1개면 바로 초안 검토(A05)로, 여러 개면 펼쳐서 고른다.",
     security: bearerAuth,
     request: { query: listConversationsQuerySchema },
@@ -75,14 +63,13 @@ registry.registerPath({
     tags: ["Conversation"],
     summary: "원본 대화 열람 (CONV-03)",
     description:
-        "대화 정보와 원본 파일 Presigned URL(10분 유효, inline)을 준다. 프론트는 viewUrl을 iframe이나 새 탭으로 띄운다. " +
-        "원본 대화 열람, 초안 검토 중 원본 대조, 문서에 연결된 원문 열람에 모두 이 API를 쓴다. 이 대화로 만든 문서 목록도 같이 준다. " +
-        "다른 회원의 대화, 삭제한 대화는 404.",
+        "화면: P02 원문 패널, A05 원본 대조. 대화 정보와 수집한 발화(messages)를 순서대로 준다. 대화 등록(CONV-01) 뒤 수집 상태 폴링에도 이 API를 쓴다(COLLECTING이면 messages는 빈 배열). " +
+        "이 대화로 만든 문서 목록도 같이 준다. 다른 회원의 대화, 삭제한 대화는 404.",
     security: bearerAuth,
     request: { params: conversationIdParamsSchema },
     responses: {
         200: {
-            description: "대화 정보와 원본 URL",
+            description: "대화 정보와 발화",
             content: { "application/json": { schema: successResponse(conversationDetailSchema) } },
         },
         ...errorResponses("VALIDATION_ERROR", "UNAUTHORIZED", "TOKEN_EXPIRED", "CONVERSATION_NOT_FOUND"),
@@ -102,7 +89,7 @@ registry.registerPath({
     summary: "대화 삭제 (CONV-04)",
     description:
         "화면: P03 대화 삭제. 소프트 삭제하며, 이 대화로 만든 문서는 남고 연결된 대화에 deleted: true로 표시된다. " +
-        "이 대화를 쓰는 문서가 생성 중(첫 초안·AI 보완·재시도)이면 409 CONVERSATION_IN_USE(details.documentIds). ",
+        "이 대화를 쓰는 문서가 생성 중(첫 초안·AI 보완·재시도)이면 409 CONVERSATION_IN_USE(details.documentIds). 생성 실패 문서는 막지 않는다.",
     security: bearerAuth,
     request: { params: conversationIdParamsSchema },
     responses: {

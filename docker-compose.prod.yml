@@ -5,6 +5,10 @@ services:
         container_name: capstone
         restart: always
         env_file: .env
+        # Node가 PID 1이면 끝난 Chromium 자식 프로세스(좀비)를 정리하지 못해서 tini를 init으로 둔다
+        init: true
+        # Chromium은 /dev/shm을 많이 쓴다 (Docker 기본 64MB면 긴 대화에서 탭이 죽음)
+        shm_size: "512m"
         # 로그 파일을 EC2 디스크에 남겨서 재배포해도 유지 (컨테이너 안 node 사용자 = uid 1000)
         volumes:
             - /var/log/backend:/var/log/backend

@@ -3,3 +3,5 @@ dist
 .env
 src/generated
 logs
+collector/.venv
+__pycache__

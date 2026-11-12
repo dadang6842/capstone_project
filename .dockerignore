@@ -8,3 +8,5 @@ src/generated
 *.md
 docker-compose*.yml
 logs
+collector/.venv
+**/__pycache__

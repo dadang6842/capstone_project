@@ -25,6 +25,12 @@ jobs:
                   DATABASE_URL: mysql://build:build@localhost:3306/build
 
             - run: npm run build
+            # 공유 대화 수집 모듈 단위 테스트 (브라우저·네트워크 없이 URL 검사·출력 형식만 확인)
+            - uses: actions/setup-python@v6
+              with:
+                  python-version: "3.11"
+            - run: python -m unittest discover -s tests -v
+              working-directory: collector
 
     # main에 push될 때만: 이미지 빌드 → Docker Hub에 올림 → EC2에서 받아서 실행
     deploy:
