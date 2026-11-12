@@ -1,5 +1,5 @@
 # ---------- 1단계: 빌드 ----------
-FROM node:22-bookworm-slim
+FROM node:22-bookworm-slim AS build
 WORKDIR /app
 
 # 의존성 먼저 설치 (package*.json·prisma가 안 바뀌면 캐시 재사용)
