@@ -1,4 +1,6 @@
 # ---------- 1단계: 빌드 ----------
+# Playwright(Chromium)가 Alpine(musl)을 지원하지 않아서 실행 단계를 Debian(bookworm-slim)으로 바꾸고,
+# bcrypt 같은 네이티브 모듈이 실행 환경과 맞도록 빌드 단계도 같은 이미지를 쓴다
 FROM node:22-bookworm-slim AS build
 WORKDIR /app
 
@@ -21,11 +23,16 @@ RUN npm prune --omit=dev && npm cache clean --force
 # ---------- 2단계: 실행 ----------
 FROM node:22-bookworm-slim
 WORKDIR /app
+
 # 공유 대화 수집 모듈(collector/)용 Python + Playwright + Chromium(headless shell)
+#  - Python 패키지는 /opt/venv에 설치하고 PATH에 넣어서 Node가 python3로 바로 실행한다
+#  - 브라우저는 node 사용자도 읽을 수 있는 /ms-playwright에 설치한다
+#  - libatomic1: Playwright가 내부에서 쓰는 Node 실행 파일(driver/node)이 필요로 함 (slim 이미지에 없음)
+#  - requirements.txt만 먼저 복사해서, 수집 모듈 코드만 바뀌면 이 층은 캐시를 재사용한다
 ENV VIRTUAL_ENV=/opt/venv PATH=/opt/venv/bin:$PATH PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 COPY collector/requirements.txt /tmp/collector-requirements.txt
 RUN apt-get update \
- && apt-get install -y --no-install-recommends python3 python3-venv \
+ && apt-get install -y --no-install-recommends python3 python3-venv libatomic1 \
  && python3 -m venv /opt/venv \
  && pip install --no-cache-dir -r /tmp/collector-requirements.txt \
  && playwright install --with-deps --only-shell chromium \
