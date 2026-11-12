@@ -66,7 +66,7 @@ export const logger = {
         winstonLogger.warn(errorLine(code, detail, ctx));
     },
 
-    // 서버 내부 오류: logger.error("GPT_REQUEST_FAILED", "OpenAI API 응답 시간 초과", { documentId, draftId })
+    // 서버 내부 오류: logger.error("AI_SERVER_REQUEST_FAILED", "300000ms 안에 응답이 없음", { documentId, draftId })
     // stack을 넘기면 다음 줄부터 함께 기록한다
     error(code: ErrorCode | InternalErrorCode, detail?: string, ctx?: LogContext, stack?: string) {
         winstonLogger.error(errorLine(code, detail, ctx) + (stack ? `\n${stack}` : ""));
