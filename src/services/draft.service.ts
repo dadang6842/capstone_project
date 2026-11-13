@@ -2,6 +2,8 @@ import type { Draft } from "../generated/prisma/client.js";
 import type { ConversationWithMessages } from "../repositories/conversation.repository.js";
 import { draftRepository } from "../repositories/draft.repository.js";
 import { describeAiError, sendAnalysisRequest } from "./document.service.js";
+import { canEditDraft, getAccess } from "./workspaceAccess.js";
+import { toUserRef } from "../schemas/common.schema.js";
 import { requestRevision, toAnalysisConversation } from "../utils/aiServer.js";
 import { AppError } from "../utils/appError.js";
 import { logger } from "../utils/logger.js";
@@ -20,13 +22,24 @@ function toKeywords(keywords: unknown): string[] {
     return Array.isArray(keywords) ? (keywords as string[]) : [];
 }
 
-// 채택·직접 수정할 수 있는 초안을 찾는다: 생성이 끝난 회차(GENERATED)이고, 문서가 아직 채택 전(DRAFT_GENERATED)이며
+// 초안을 고칠 권한 확인 (직접 수정·AI 보완·다시 시도·채택 공통)
+//  - 볼 수 없는 문서(다른 회원·내가 팀원이 아닌 팀)·삭제한 문서의 초안은 404
+//  - 팀 일반 구성원이 남이 최초 생성 요청한 문서를 고치려 하면 403
+async function requireDraftEditor(
+    userId: number,
+    document: { userId: bigint | null; workspaceId: bigint | null; deletedAt: Date | null },
+) {
+    const access = document.deletedAt ? null : await getAccess(userId, document);
+    if (!access) throw new AppError("DRAFT_NOT_FOUND");
+    if (!canEditDraft(access)) throw new AppError("FORBIDDEN");
+}
+
+// 채택·직접 수정할 수 있는 초안을 찾는다: 고칠 권한이 있고, 생성이 끝난 회차(GENERATED)이고, 문서가 아직 채택 전(DRAFT_GENERATED)이며
 // AI 보완이 진행 중이 아니어야 한다
 async function findEditableDraft(userId: number, draftId: number) {
     const draft = await draftRepository.findWithDocumentState(BigInt(draftId));
-    if (!draft || draft.document.userId !== BigInt(userId) || draft.document.deletedAt) {
-        throw new AppError("DRAFT_NOT_FOUND");
-    }
+    if (!draft) throw new AppError("DRAFT_NOT_FOUND");
+    await requireDraftEditor(userId, draft.document);
     if (draft.status !== "GENERATED" || draft.document.status !== "DRAFT_GENERATED") {
         throw new AppError("INVALID_DRAFT_STATUS");
     }
@@ -73,6 +86,7 @@ export async function sendRevisionRequest(
 // 보완 재시도(A05-2 보완 실패의 '다시 시도'): 실패한 회차와 같은 번호·기준 회차·보완 항목으로 새 행을 만들고 AI-03을 다시 보낸다.
 // 기준 회차는 지금 저장된 내용을 쓴다(실패 뒤 직접 수정했다면 수정본). 보완 요청(DRAFT-04)과 같은 조건을 확인한다.
 async function retryRevision(
+    userId: number,
     draft: NonNullable<Awaited<ReturnType<typeof draftRepository.findForRetry>>>,
     conversations: ConversationWithMessages[],
 ): Promise<RetryDraftResponse> {
@@ -87,7 +101,13 @@ async function retryRevision(
         });
     }
 
-    const created = await draftRepository.createRevision(draft.documentId, parent.draftId, reasons, draft.versionNo);
+    const created = await draftRepository.createRevision(
+        draft.documentId,
+        parent.draftId,
+        BigInt(userId),
+        reasons,
+        draft.versionNo,
+    );
     if (!created) throw new AppError("REVISION_IN_PROGRESS");
 
     void sendRevisionRequest(created.draftId, parent, reasons, conversations);
@@ -95,12 +115,11 @@ async function retryRevision(
 }
 
 export const draftService = {
-    // 프론트가 생성 상태를 폴링하는 API. 다른 회원의 초안, 삭제한 문서의 초안은 404
+    // 프론트가 생성 상태를 폴링하는 API. 볼 수 없는 문서(다른 회원·내가 팀원이 아닌 팀)의 초안, 삭제한 문서의 초안은 404
     async get(userId: number, draftId: number): Promise<DraftDetail> {
         const draft = await draftRepository.findByIdWithDocument(BigInt(draftId));
-        if (!draft || draft.document.userId !== BigInt(userId) || draft.document.deletedAt) {
-            throw new AppError("DRAFT_NOT_FOUND");
-        }
+        const access = draft && !draft.document.deletedAt ? await getAccess(userId, draft.document) : null;
+        if (!draft || !access) throw new AppError("DRAFT_NOT_FOUND");
 
         const { document } = draft;
         return {
@@ -118,6 +137,10 @@ export const draftService = {
             createdAt: draft.createdAt,
             documentStatus: document.status,
             revising: document.drafts.length > 0,
+            requester: toUserRef(document.user),
+            lastEditor: toUserRef(document.lastEditor),
+            draftRequester: toUserRef(draft.requester),
+            canEdit: canEditDraft(access),
             conversations: document.sources.map(({ conversation }) => ({
                 conversationId: Number(conversation.conversationId),
                 title: conversation.title,
@@ -130,9 +153,8 @@ export const draftService = {
     // 첫 초안(1회차)은 AI-01부터, AI 보완 회차(2회차 이상)는 같은 기준 회차·보완 항목으로 AI-03을 다시 보낸다.
     async retry(userId: number, draftId: number): Promise<RetryDraftResponse> {
         const draft = await draftRepository.findForRetry(BigInt(draftId));
-        if (!draft || draft.document.userId !== BigInt(userId) || draft.document.deletedAt) {
-            throw new AppError("DRAFT_NOT_FOUND");
-        }
+        if (!draft) throw new AppError("DRAFT_NOT_FOUND");
+        await requireDraftEditor(userId, draft.document);
 
         // 실패한 초안만, 그리고 그 회차의 가장 최근 시도만 (이미 재시도했으면 새 행으로 다시 시도해야 함)
         if (
@@ -143,11 +165,11 @@ export const draftService = {
         }
         // 남아 있는 대화로만 다시 분석한다. 실패한 문서의 대화는 삭제할 수 있어서(CONV-04) 모두 없으면 다시 생성할 수 없다
         const conversations = draft.document.sources.map(({ conversation }) => conversation);
-        if (draft.versionNo > 1) return retryRevision(draft, conversations);
+        if (draft.versionNo > 1) return retryRevision(userId, draft, conversations);
         if (conversations.length === 0)
             throw new AppError("SOURCES_DELETED", { message: "원본 대화가 모두 삭제되어 다시 생성할 수 없습니다." });
 
-        const created = await draftRepository.createFirstDraftRetry(draft.documentId);
+        const created = await draftRepository.createFirstDraftRetry(draft.documentId, BigInt(userId));
         if (!created) throw new AppError("INVALID_DRAFT_STATUS");
 
         // await 하지 않는다: 문서 생성 요청(DRAFT-01)과 같이 AI 서버 요청은 뒤에서 보낸다
@@ -173,7 +195,7 @@ export const draftService = {
             });
         }
 
-        const created = await draftRepository.createRevision(base.documentId, base.draftId, reasons);
+        const created = await draftRepository.createRevision(base.documentId, base.draftId, BigInt(userId), reasons);
         if (!created) throw new AppError("REVISION_IN_PROGRESS");
 
         // await 하지 않는다: AI 서버가 느리거나 죽어 있어도 사용자는 기다리지 않는다
@@ -185,7 +207,10 @@ export const draftService = {
     // 고른 회차를 지식 문서로 확정한다. 최신 회차가 아니어도 되고, 다른 회차는 GENERATED로 그대로 둔다.
     async accept(userId: number, draftId: number): Promise<AcceptDraftResponse> {
         const draft = await findEditableDraft(userId, draftId);
-        const finalizedAt = await draftRepository.accept({ ...draft, keywords: toKeywords(draft.keywords) });
+        const finalizedAt = await draftRepository.accept(
+            { ...draft, keywords: toKeywords(draft.keywords) },
+            BigInt(userId),
+        );
         if (!finalizedAt) throw new AppError("INVALID_DRAFT_STATUS");
 
         return { documentId: Number(draft.documentId), status: "FINALIZED", finalizedAt };
@@ -194,7 +219,9 @@ export const draftService = {
     // 선택한 회차의 제목·본문을 덮어쓴다. 새 회차를 만들지 않고, 이후 채택·AI 보완의 기준이 된다.
     async update(userId: number, draftId: number, body: UpdateDraftBody): Promise<UpdateDraftResponse> {
         const draft = await findEditableDraft(userId, draftId);
-        if (!(await draftRepository.updateContent(draft.draftId, body))) throw new AppError("INVALID_DRAFT_STATUS");
+        if (!(await draftRepository.updateContent(draft.draftId, draft.documentId, BigInt(userId), body))) {
+            throw new AppError("INVALID_DRAFT_STATUS");
+        }
         return { draftId };
     },
 };

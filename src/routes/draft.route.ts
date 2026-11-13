@@ -23,8 +23,10 @@ registry.registerPath({
     tags: ["Draft"],
     summary: "초안 조회 (DRAFT-02)",
     description:
-        "초안의 생성 상태와 내용을 조회한다. 문서 생성 요청(DRAFT-01) 뒤 프론트가 몇 초 간격으로 폴링한다. " +
-        "status가 GENERATING이면 몇 초 뒤 다시 조회, GENERATED·ACCEPTED(채택한 회차)면 내용 표시, FAILED면 실패 안내.",
+        "화면: A04-1 생성 상태 폴링, A05 ③ 초안 보기, A05-2 보완 폴링. 초안 하나(회차의 시도 하나)의 상태와 내용을 준다. " +
+        "status가 GENERATING이면 몇 초 뒤 다시 조회, GENERATED·ACCEPTED(채택한 회차)면 내용 표시, FAILED면 실패 안내. " +
+        "팀 화면용으로 최초 생성 요청자(requester)·최근 수정(lastEditor)·이번 회차 생성·보완 요청자(draftRequester)와 내가 고칠 수 있는지(canEdit)를 준다." +
+        " 팀 문서를 보려면 그 팀의 팀원이어야 한다(아니면 404).",
     security: bearerAuth,
     request: { params: draftIdParamsSchema },
     responses: {
@@ -44,7 +46,8 @@ registry.registerPath({
     summary: "초안 생성 재시도 (DRAFT-05)",
     description:
         "화면: A04-1 생성 실패의 '다시 시도'(1회차), A05-2 보완 실패의 '다시 시도'(2회차 이상). 실패한 초안은 남기고 같은 회차의 새 초안을 GENERATING으로 만들어 바로 응답한다. " +
-        -"1회차는 첫 초안 생성(AI-01), 2회차 이상은 같은 기준 회차·보완 항목으로 AI 보완(AI-03)을 다시 보낸다. 프론트는 응답의 draftId로 DRAFT-02를 폴링한다.",
+        "1회차는 첫 초안 생성(AI-01), 2회차 이상은 같은 기준 회차·보완 항목으로 AI 보완(AI-03)을 다시 보낸다. 프론트는 응답의 draftId로 DRAFT-02를 폴링한다. " +
+        "팀 문서는 소유자·관리자는 모두, 일반 구성원은 본인이 최초 생성 요청한 문서만 할 수 있다(아니면 403 FORBIDDEN).",
     security: bearerAuth,
     request: { params: draftIdParamsSchema },
     responses: {
@@ -56,8 +59,10 @@ registry.registerPath({
             "VALIDATION_ERROR",
             "UNAUTHORIZED",
             "TOKEN_EXPIRED",
+            "FORBIDDEN",
             "DRAFT_NOT_FOUND",
             "INVALID_DRAFT_STATUS",
+            "REVISION_IN_PROGRESS",
             "SOURCES_DELETED",
         ),
     },
@@ -71,8 +76,9 @@ registry.registerPath({
     summary: "AI 보완 요청 (DRAFT-04)",
     description:
         "화면: A05 → P04 '보완 요청'. 보고 있는 회차를 기준으로 새 회차를 GENERATING으로 만들고 바로 응답한다(AI 서버 요청은 뒤에서). " +
-        "프론트는 응답의 draftId로 DRAFT-02를 폴링한다. " +
-        "TOO_LONG = 분량 줄이기, MISSING_CONTENT = 누락 내용 보완(원문이 모두 삭제됐으면 409 SOURCES_DELETED).",
+        "프론트는 A05-2 'AI 보완 중'을 띄우고 응답의 draftId로 DRAFT-02를 폴링한다. " +
+        "TOO_LONG = 분량 줄이기, MISSING_CONTENT = 누락 내용 보완(원문이 모두 삭제됐으면 409 SOURCES_DELETED). " +
+        "팀 문서는 소유자·관리자는 모두, 일반 구성원은 본인이 최초 생성 요청한 문서만 할 수 있다(아니면 403 FORBIDDEN).",
     security: bearerAuth,
     request: {
         params: draftIdParamsSchema,
@@ -87,6 +93,7 @@ registry.registerPath({
             "VALIDATION_ERROR",
             "UNAUTHORIZED",
             "TOKEN_EXPIRED",
+            "FORBIDDEN",
             "DRAFT_NOT_FOUND",
             "INVALID_DRAFT_STATUS",
             "REVISION_IN_PROGRESS",
@@ -109,7 +116,8 @@ registry.registerPath({
     description:
         "고른 회차를 지식 문서로 확정한다. 최신 회차가 아니어도 된다. 초안의 제목·요약·지식 유형·본문을 문서로, 키워드를 문서 키워드로 복사하고 " +
         "문서를 FINALIZED로 바꾼다. 다른 회차는 그대로 둔다. 생성 완료(GENERATED) 회차만 가능하고, 이미 채택한 문서면 409 INVALID_DRAFT_STATUS, " +
-        "AI 보완이 진행 중이면 409 REVISION_IN_PROGRESS. 성공하면 프론트는 지식 문서 상세로 이동한다.",
+        "AI 보완이 진행 중이면 409 REVISION_IN_PROGRESS. 성공하면 프론트는 지식 문서 상세로 이동한다. " +
+        "팀 문서는 소유자·관리자는 모두, 일반 구성원은 본인이 최초 생성 요청한 문서만 할 수 있다(아니면 403 FORBIDDEN).",
     security: bearerAuth,
     request: { params: draftIdParamsSchema },
     responses: {
@@ -121,6 +129,7 @@ registry.registerPath({
             "VALIDATION_ERROR",
             "UNAUTHORIZED",
             "TOKEN_EXPIRED",
+            "FORBIDDEN",
             "DRAFT_NOT_FOUND",
             "INVALID_DRAFT_STATUS",
             "REVISION_IN_PROGRESS",
@@ -137,7 +146,8 @@ registry.registerPath({
     description:
         "선택한 회차(GENERATED)의 제목·본문을 덮어쓴다. AI 원본은 따로 보관하지 않고 새 회차도 만들지 않는다. 보낸 필드만 바꾸며 둘 중 하나는 보내야 하고, 보낸 값이 공백만 있으면 400. " +
         "생성 완료 전·실패한 회차, 이미 채택한 문서면 409 INVALID_DRAFT_STATUS, AI 보완이 진행 중이면 409 REVISION_IN_PROGRESS. " +
-        "저장한 내용은 이후 최종 채택과 AI 보완 요청의 기준이 된다.",
+        "저장한 내용은 이후 최종 채택과 AI 보완 요청의 기준이 된다. " +
+        "팀 문서는 소유자·관리자는 모두, 일반 구성원은 본인이 최초 생성 요청한 문서만 할 수 있다(아니면 403 FORBIDDEN).",
     security: bearerAuth,
     request: {
         params: draftIdParamsSchema,
@@ -152,6 +162,7 @@ registry.registerPath({
             "VALIDATION_ERROR",
             "UNAUTHORIZED",
             "TOKEN_EXPIRED",
+            "FORBIDDEN",
             "DRAFT_NOT_FOUND",
             "INVALID_DRAFT_STATUS",
             "REVISION_IN_PROGRESS",

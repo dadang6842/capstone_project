@@ -5,15 +5,21 @@ import { messagesInclude } from "./conversation.repository.js";
 
 const ERROR_MESSAGE_MAX = 1000;
 
+// 생성 요청자·최근 수정자 표시용
+const userRef = { select: { userId: true, nickname: true } } as const;
+
 export const draftRepository = {
-    // 초안 조회용: 초안, 보완 항목, 문서(+ 진행 중인 AI 보완 초안, 분석한 원본 대화)
+    // 초안 조회용: 초안과 이번 회차 요청자, 보완 항목, 문서(+ 최초 생성 요청자·최근 수정자, 진행 중인 AI 보완 초안, 분석한 원본 대화)
     findByIdWithDocument(draftId: bigint) {
         return prisma.draft.findUnique({
             where: { draftId },
             include: {
+                requester: userRef,
                 feedbacks: { select: { reason: true } },
                 document: {
                     include: {
+                        user: userRef,
+                        lastEditor: userRef,
                         // AI 보완 진행 중 여부 (2회차 이상이 GENERATING)
                         drafts: {
                             where: { versionNo: { gt: 1 }, status: "GENERATING" },
@@ -59,15 +65,15 @@ export const draftRepository = {
     },
 
     // 첫 초안 재시도: 문서를 FAILED → GENERATING으로 돌리고 같은 회차(1)의 새 초안 행을 만든다. 실패한 행은 그대로 둔다.
-    // 문서가 FAILED일 때만 바꿔서, 버튼을 두 번 눌러도 새 행은 하나만 생긴다 (아니면 null)
-    createFirstDraftRetry(documentId: bigint) {
+    // 문서가 FAILED일 때만 바꿔서, 버튼을 두 번 눌러도 새 행은 하나만 생긴다 (아니면 null). requestedBy = 다시 시도한 회원
+    createFirstDraftRetry(documentId: bigint, requestedBy: bigint) {
         return prisma.$transaction(async (tx) => {
             const { count } = await tx.document.updateMany({
                 where: { documentId, status: "FAILED" },
                 data: { status: "GENERATING" },
             });
             if (count === 0) return null;
-            return tx.draft.create({ data: { documentId, versionNo: 1 }, select: { draftId: true } });
+            return tx.draft.create({ data: { documentId, versionNo: 1, requestedBy }, select: { draftId: true } });
         });
     },
 
@@ -84,8 +90,15 @@ export const draftRepository = {
     // AI 보완 요청: 기준 회차를 부모로 새 회차(GENERATING)와 보완 항목을 만든다. 기준 회차는 그대로 둔다.
     // 문서 행을 잠근 뒤 진행 중인 보완이 없는지 다시 확인해서, 버튼을 두 번 눌러도 새 회차는 하나만 생긴다 (아니면 null).
     // 새 회차 번호 = 생성이 끝난 회차 중 가장 큰 번호 + 1 (보완이 실패했던 번호는 다시 쓴다).
-    // 보완 재시도(DRAFT-05)는 실패한 회차와 같은 번호를 versionNo로 넘긴다
-    createRevision(documentId: bigint, parentDraftId: bigint, reasons: FeedbackReason[], versionNo?: number) {
+    // 보완 재시도(DRAFT-05)는 실패한 회차와 같은 번호를 versionNo로 넘긴다.
+    // requestedBy = 보완을 요청한 회원 (새 회차의 요청자이자 문서의 최근 수정자)
+    createRevision(
+        documentId: bigint,
+        parentDraftId: bigint,
+        requestedBy: bigint,
+        reasons: FeedbackReason[],
+        versionNo?: number,
+    ) {
         return prisma.$transaction(async (tx) => {
             await tx.$queryRaw`SELECT document_id FROM documents WHERE document_id = ${documentId} FOR UPDATE`;
 
@@ -99,10 +112,12 @@ export const draftRepository = {
                 where: { documentId, status: { in: ["GENERATED", "ACCEPTED"] } },
                 _max: { versionNo: true },
             });
+            await tx.document.update({ where: { documentId }, data: { lastEditedBy: requestedBy } });
             return tx.draft.create({
                 data: {
                     documentId,
                     parentDraftId,
+                    requestedBy,
                     versionNo: versionNo ?? (_max.versionNo ?? 1) + 1,
                     feedbacks: { create: reasons.map((reason) => ({ reason })) },
                 },
@@ -112,10 +127,14 @@ export const draftRepository = {
     },
 
     // AI 보완 완료(AI-03 응답): 새 회차에 결과를 저장하고 GENERATED (문서는 DRAFT_GENERATED 그대로).
-    // 기다리는 사이 상태가 바뀌었으면 저장하지 않는다 (false)
+    // 기다리는 사이 상태가 바뀌었거나 팀이 삭제됐으면 저장하지 않는다 (false)
     async saveRevisionResult(draftId: bigint, result: DraftResult) {
         const { count } = await prisma.draft.updateMany({
-            where: { draftId, status: "GENERATING" },
+            where: {
+                draftId,
+                status: "GENERATING",
+                document: { OR: [{ workspaceId: null }, { workspace: { deletedAt: null } }] },
+            },
             data: { ...result, status: "GENERATED" },
         });
         return count > 0;
@@ -154,6 +173,7 @@ export const draftRepository = {
                 document: {
                     select: {
                         userId: true,
+                        workspaceId: true,
                         status: true,
                         deletedAt: true,
                         drafts: {
@@ -168,16 +188,19 @@ export const draftRepository = {
     },
 
     // 최종 채택: 문서에 초안 내용을 복사하고 FINALIZED, 초안 ACCEPTED, 키워드를 document_keywords로 (한 트랜잭션)
-    // 문서가 DRAFT_GENERATED일 때만 바꿔서, 두 회차를 동시에 채택해도 하나만 된다 (아니면 null)
-    accept(draft: {
-        draftId: bigint;
-        documentId: bigint;
-        title: string | null;
-        summary: string | null;
-        category: Category | null;
-        content: string | null;
-        keywords: string[];
-    }) {
+    // 문서가 DRAFT_GENERATED일 때만 바꿔서, 두 회차를 동시에 채택해도 하나만 된다 (아니면 null). 채택한 회원이 최근 수정자
+    accept(
+        draft: {
+            draftId: bigint;
+            documentId: bigint;
+            title: string | null;
+            summary: string | null;
+            category: Category | null;
+            content: string | null;
+            keywords: string[];
+        },
+        editorId: bigint,
+    ) {
         return prisma.$transaction(async (tx) => {
             const finalizedAt = new Date();
             const { count } = await tx.document.updateMany({
@@ -189,6 +212,7 @@ export const draftRepository = {
                     content: draft.content,
                     status: "FINALIZED",
                     finalizedAt,
+                    lastEditedBy: editorId,
                 },
             });
             if (count === 0) return null;
@@ -202,9 +226,13 @@ export const draftRepository = {
         });
     },
 
-    // 직접 수정: 받은 제목·본문만 덮어쓴다(AI 원본은 보관하지 않음). 그 사이 상태가 바뀌었으면 0건
-    async updateContent(draftId: bigint, data: { title?: string; content?: string }) {
-        const { count } = await prisma.draft.updateMany({ where: { draftId, status: "GENERATED" }, data });
-        return count > 0;
+    // 직접 수정: 받은 제목·본문만 덮어쓰고 수정한 회원을 문서의 최근 수정자로. 그 사이 상태가 바뀌었으면 false
+    updateContent(draftId: bigint, documentId: bigint, editorId: bigint, data: { title?: string; content?: string }) {
+        return prisma.$transaction(async (tx) => {
+            const { count } = await tx.draft.updateMany({ where: { draftId, status: "GENERATED" }, data });
+            if (count === 0) return false;
+            await tx.document.update({ where: { documentId }, data: { lastEditedBy: editorId } });
+            return true;
+        });
     },
 };

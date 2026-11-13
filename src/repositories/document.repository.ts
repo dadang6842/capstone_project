@@ -1,6 +1,14 @@
 import { prisma } from "../config/prisma.js";
 import type { Category, FailReason, Prisma } from "../generated/prisma/client.js";
 import type { DraftResult } from "../utils/aiServer.js";
+import type { SpaceFilter } from "../services/workspaceAccess.js";
+
+// 생성 요청자·최근 수정자 표시용
+const userRef = { select: { userId: true, nickname: true } } as const;
+const peopleSelect = { user: userRef, lastEditor: userRef } as const;
+
+// AI 결과를 저장해도 되는 문서: 개인 문서이거나 삭제되지 않은 팀의 문서 (팀을 지우면 진행 중이던 결과는 반영하지 않음)
+const liveSpace: Prisma.DocumentWhereInput = { OR: [{ workspaceId: null }, { workspace: { deletedAt: null } }] };
 
 // drafts.error_message가 VARCHAR(1000)
 const ERROR_MESSAGE_MAX = 1000;
@@ -29,26 +37,29 @@ export const documentRepository = {
     },
 
     // 문서(GENERATING) + 분석 대상 대화 연결 + 1회차 초안(GENERATING)을 한 번에 만든다 (중첩 create라 하나의 트랜잭션)
-    createWithFirstDraft(userId: bigint, conversationIds: bigint[]) {
+    // userId = 최초 생성 요청자, 1회차 초안의 requestedBy도 같은 회원
+    createWithFirstDraft(userId: bigint, workspaceId: bigint | null, conversationIds: bigint[]) {
         return prisma.document.create({
             data: {
                 userId,
+                workspaceId,
                 sources: { create: conversationIds.map((conversationId) => ({ conversationId })) },
-                drafts: { create: { versionNo: 1 } },
+                drafts: { create: { versionNo: 1, requestedBy: userId } },
             },
             include: { drafts: { select: { draftId: true } } },
         });
     },
 
-    // 검토할 초안이 있는(DRAFT_GENERATED) 내 문서를 최근 생성순으로, 생성이 끝난 최신 회차의 제목과 함께
+    // 이 공간에서 검토할 초안이 있는(DRAFT_GENERATED) 문서를 최근 생성순으로, 생성이 끝난 최신 회차의 제목과 함께
     // (AI 보완 중인 회차는 아직 제목이 없어서 뺀다)
-    findPendingByUser(userId: bigint) {
+    findPendingBySpace(space: SpaceFilter) {
         return prisma.document.findMany({
-            where: { userId, deletedAt: null, status: "DRAFT_GENERATED" },
+            where: { ...space, deletedAt: null, status: "DRAFT_GENERATED" },
             orderBy: [{ createdAt: "desc" }, { documentId: "desc" }],
             select: {
                 documentId: true,
                 createdAt: true,
+                user: userRef,
                 drafts: {
                     where: { status: "GENERATED" },
                     orderBy: { draftId: "desc" },
@@ -59,10 +70,10 @@ export const documentRepository = {
         });
     },
 
-    // 지식 문서 목록(DOC-01): 삭제하지 않은 내 최종 문서를 검색어·유형으로 거르고 정렬한 한 페이지와 전체 개수
+    // 지식 문서 목록(DOC-01): 이 공간의 삭제하지 않은 최종 문서를 검색어·유형으로 거르고 정렬한 한 페이지와 전체 개수
     // 검색은 제목·본문 FULLTEXT(ngram) 인덱스를 쓴다. 검색 중에도 관련도가 아니라 고른 정렬을 따른다
     findFinalizedPage(
-        userId: bigint,
+        space: SpaceFilter,
         { q, category, sort }: { q?: string; category?: Category; sort: "updated" | "created" },
         { skip, take }: { skip: number; take: number },
     ) {
@@ -70,7 +81,7 @@ export const documentRepository = {
         if (search === null) return Promise.resolve([[], 0] as const);
 
         const where: Prisma.DocumentWhereInput = {
-            userId,
+            ...space,
             deletedAt: null,
             status: "FINALIZED",
             category,
@@ -91,17 +102,19 @@ export const documentRepository = {
                     createdAt: true,
                     updatedAt: true,
                     keywords: { orderBy: { documentKeywordId: "asc" }, select: { keyword: true } },
+                    ...peopleSelect,
                 },
             }),
             prisma.document.count({ where }),
         ]);
     },
 
-    // 지식 문서 상세(DOC-02): 문서와 키워드, 연결된 대화(삭제 여부 포함)
+    // 지식 문서 상세(DOC-02): 문서와 키워드, 연결된 대화(삭제 여부 포함), 생성 요청자·최근 수정자
     findByIdWithDetail(documentId: bigint) {
         return prisma.document.findUnique({
             where: { documentId },
             include: {
+                ...peopleSelect,
                 keywords: { orderBy: { documentKeywordId: "asc" }, select: { keyword: true } },
                 sources: {
                     orderBy: { conversationId: "asc" },
@@ -111,22 +124,26 @@ export const documentRepository = {
         });
     },
 
-    // 직접 수정 전 확인용: 주인·상태·삭제 여부만
+    // 직접 수정·삭제 전 확인용: 요청자·공간·상태·삭제 여부만
     findState(documentId: bigint) {
         return prisma.document.findUnique({
             where: { documentId },
-            select: { userId: true, status: true, deletedAt: true },
+            select: { userId: true, workspaceId: true, status: true, deletedAt: true },
         });
     },
 
     // 지식 문서 직접 수정(DOC-03): 받은 제목·본문만 덮어쓰고, 키워드를 받았으면 통째로 바꾼다(이전 내용은 보관하지 않음)
-    // 키워드만 바꿔도 수정일이 바뀌도록 updated_at은 직접 넣는다. 그 사이 문서가 삭제됐으면 null
+    // 키워드만 바꿔도 수정일이 바뀌도록 updated_at은 직접 넣는다. 수정한 회원은 최근 수정자(last_edited_by)로. 그 사이 문서가 삭제됐으면 null
     // 키워드 UNIQUE가 대소문자를 구분하지 않아서 skipDuplicates로 겹치는 값은 건너뛴다
-    updateFinalized(documentId: bigint, data: { title?: string; content?: string; keywords?: string[] }) {
+    updateFinalized(
+        documentId: bigint,
+        editorId: bigint,
+        data: { title?: string; content?: string; keywords?: string[] },
+    ) {
         return prisma.$transaction(async (tx) => {
             const { count } = await tx.document.updateMany({
                 where: { documentId, status: "FINALIZED", deletedAt: null },
-                data: { title: data.title, content: data.content, updatedAt: new Date() },
+                data: { title: data.title, content: data.content, lastEditedBy: editorId, updatedAt: new Date() },
             });
             if (count === 0) return null;
 
@@ -164,6 +181,7 @@ export const documentRepository = {
             where: { documentId },
             select: {
                 userId: true,
+                workspaceId: true,
                 status: true,
                 deletedAt: true,
                 drafts: {
@@ -175,11 +193,11 @@ export const documentRepository = {
     },
 
     // 첫 초안 생성 완료(AI-01 응답): 초안에 결과를 저장하고 GENERATED, 문서 DRAFT_GENERATED.
-    // 기다리는 사이 상태가 바뀌었으면(서버 재시작으로 실패 처리됨 등) 저장하지 않는다 (false)
+    // 기다리는 사이 상태가 바뀌었거나(서버 재시작으로 실패 처리됨 등) 팀이 삭제됐으면 저장하지 않는다 (false)
     saveFirstDraftResult(documentId: bigint, draftId: bigint, result: DraftResult) {
         return prisma.$transaction(async (tx) => {
             const { count } = await tx.draft.updateMany({
-                where: { draftId, status: "GENERATING" },
+                where: { draftId, status: "GENERATING", document: liveSpace },
                 data: { ...result, status: "GENERATED" },
             });
             if (count === 0) return false;

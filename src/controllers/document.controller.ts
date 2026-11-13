@@ -6,6 +6,7 @@ import type {
     CreateDocumentBody,
     DocumentIdParams,
     ListDocumentsQuery,
+    ListPendingDocumentsQuery,
     UpdateDocumentBody,
 } from "../schemas/document.schema.js";
 
@@ -48,7 +49,10 @@ export const documentController = {
     },
 
     async listPending(req: Request, res: Response) {
-        const result = await documentService.listPending(req.user.userId);
+        const result = await documentService.listPending(
+            req.user.userId,
+            req.query as unknown as ListPendingDocumentsQuery,
+        );
         sendSuccess(res, result);
     },
 };
