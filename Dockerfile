@@ -8,6 +8,9 @@ WORKDIR /app
 # postinstall에서 prisma generate가 돌기 때문에 prisma 폴더와 설정 파일도 같이 복사
 # (tsconfig.json이 없으면 생성된 클라이언트의 import가 .ts로 만들어져 실행 시 에러가 나므로 같이 복사)
 # prisma.config.ts가 DATABASE_URL을 요구하므로 generate용 가짜 값을 넣음 (DB에 접속하지 않음)
+# Prisma는 설치(postinstall) 때 OpenSSL 버전을 보고 맞는 엔진을 받는다. slim 이미지에는 OpenSSL이 없어서
+# 먼저 설치하지 않으면 엔진을 잘못 받고, 실행 시(node 사용자) node_modules에 다시 받으려다 권한 오류가 난다
+RUN apt-get update && apt-get install -y --no-install-recommends openssl && rm -rf /var/lib/apt/lists/*
 COPY package*.json prisma.config.ts tsconfig.json ./
 COPY prisma ./prisma
 RUN DATABASE_URL="mysql://build:build@localhost:3306/build" npm ci
@@ -32,7 +35,7 @@ WORKDIR /app
 ENV VIRTUAL_ENV=/opt/venv PATH=/opt/venv/bin:$PATH PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 COPY collector/requirements.txt /tmp/collector-requirements.txt
 RUN apt-get update \
- && apt-get install -y --no-install-recommends python3 python3-venv libatomic1 \
+ && apt-get install -y --no-install-recommends python3 python3-venv libatomic1 openssl \
  && python3 -m venv /opt/venv \
  && pip install --no-cache-dir -r /tmp/collector-requirements.txt \
  && playwright install --with-deps --only-shell chromium \
