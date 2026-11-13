@@ -38,6 +38,14 @@ model User {
   conversations Conversation[]
   documents     Document[]
 
+  editedDocuments     Document[]            @relation("DocumentLastEditor")
+  requestedDrafts     Draft[]               @relation("DraftRequester")
+  deletedDocuments    Document[]            @relation("DocumentDeleter")
+  savedVersions       DocumentVersion[]
+  workspaceMembers    WorkspaceMember[]
+  sentInvitations     WorkspaceInvitation[] @relation("InvitationInviter")
+  receivedInvitations WorkspaceInvitation[] @relation("InvitationInvitee")
+
   @@index([createdAt], map: "idx_users_created") // 관리자 지표: 기간별 가입자 수
   @@map("users")
 }
@@ -80,7 +88,8 @@ enum CollectFailReason {
 
 model Conversation {
   conversationId    BigInt             @id @default(autoincrement()) @map("conversation_id") @db.UnsignedBigInt
-  userId            BigInt             @map("user_id") @db.UnsignedBigInt
+  userId            BigInt?            @map("user_id") @db.UnsignedBigInt /// 등록자. 탈퇴로 회원이 영구 삭제되면 NULL (팀 대화는 팀에 남음, 개인 대화는 탈퇴 처리에서 지움)
+  workspaceId       BigInt?            @map("workspace_id") @db.UnsignedBigInt /// 팀 워크스페이스. NULL이면 등록자의 개인 워크스페이스
   shareUrl          String             @map("share_url") @db.VarChar(255) /// 정규화한 공유 링크 (https://chatgpt.com/share/<UUID 소문자>)
   captureId         String?            @map("capture_id") @db.VarChar(80) /// 수집 모듈이 준 내용 해시 (share_ + SHA-256). 링크·내용이 같으면 같은 값. 중복 확인용, 수집 전 NULL
   title             String?            @db.VarChar(255) /// 공유 페이지 제목. 수집 전·실패면 NULL
@@ -89,12 +98,14 @@ model Conversation {
   createdAt         DateTime           @default(now()) @map("created_at") @db.DateTime(3) /// 링크 입력(등록) 일시
   deletedAt         DateTime?          @map("deleted_at") @db.DateTime(3) /// 대화 삭제(소프트)
 
-  user                  User                   @relation(fields: [userId], references: [userId], onDelete: Cascade, map: "fk_conversations_user")
+  user                  User?                  @relation(fields: [userId], references: [userId], onDelete: SetNull, map: "fk_conversations_user")
+  workspace             Workspace?             @relation(fields: [workspaceId], references: [workspaceId], onDelete: Cascade, map: "fk_conversations_workspace")
   messages              ConversationMessage[]
   documentConversations DocumentConversation[]
 
   @@index([userId, deletedAt, createdAt], map: "idx_conversations_user")
   @@index([userId, captureId], map: "idx_conversations_capture") // 같은 내용 중복 수집 확인
+  @@index([workspaceId, deletedAt, createdAt], map: "idx_conversations_workspace") // 팀 대화 목록
   @@map("conversations")
 }
 
@@ -139,7 +150,9 @@ enum DocumentStatus {
 
 model Document {
   documentId   BigInt         @id @default(autoincrement()) @map("document_id") @db.UnsignedBigInt
-  userId       BigInt         @map("user_id") @db.UnsignedBigInt
+  userId       BigInt?        @map("user_id") @db.UnsignedBigInt /// 생성 요청자. 탈퇴로 회원이 영구 삭제되면 NULL (팀 문서는 팀에 남음)
+  workspaceId  BigInt?        @map("workspace_id") @db.UnsignedBigInt /// 팀 워크스페이스. NULL이면 생성 요청자의 개인 워크스페이스
+  lastEditedBy BigInt?        @map("last_edited_by") @db.UnsignedBigInt /// 최근 수정자: 초안 직접 수정·AI 보완 요청·최종 채택·지식 문서 수정을 마지막으로 한 회원. 생성 직후엔 NULL
   title        String?        @db.VarChar(255)
   content      String?        @db.LongText
   summary      String?        @db.VarChar(512)
@@ -149,15 +162,21 @@ model Document {
   lastViewedAt DateTime       @default(now()) @map("last_viewed_at") @db.DateTime(3)
   createdAt    DateTime       @default(now()) @map("created_at") @db.DateTime(3)
   updatedAt    DateTime       @updatedAt @map("updated_at") @db.DateTime(3)
-  deletedAt    DateTime?      @map("deleted_at") @db.DateTime(3)
+  deletedAt    DateTime?      @map("deleted_at") @db.DateTime(3) /// 휴지통으로 옮긴 일시 (복원하면 NULL, 영구 삭제하면 행 삭제)
+  deletedBy    BigInt?        @map("deleted_by") @db.UnsignedBigInt /// 휴지통으로 옮긴 회원 (팀 휴지통에 표시)
 
-  user     User                   @relation(fields: [userId], references: [userId], onDelete: Cascade, map: "fk_documents_user")
-  drafts   Draft[]
-  sources  DocumentConversation[]
-  keywords DocumentKeyword[]
+  user       User?                  @relation(fields: [userId], references: [userId], onDelete: SetNull, map: "fk_documents_user")
+  workspace  Workspace?             @relation(fields: [workspaceId], references: [workspaceId], onDelete: Cascade, map: "fk_documents_workspace")
+  lastEditor User?                  @relation("DocumentLastEditor", fields: [lastEditedBy], references: [userId], onDelete: SetNull, map: "fk_documents_last_editor")
+  deleter    User?                  @relation("DocumentDeleter", fields: [deletedBy], references: [userId], onDelete: SetNull, map: "fk_documents_deleter")
+  drafts     Draft[]
+  sources    DocumentConversation[]
+  keywords   DocumentKeyword[]
+  versions   DocumentVersion[]
 
   @@index([userId, deletedAt, updatedAt], map: "idx_documents_dashboard")
   @@index([userId, category], map: "idx_documents_category")
+  @@index([workspaceId, deletedAt, updatedAt], map: "idx_documents_workspace") // 팀 지식 문서·초안 목록
   @@index([createdAt], map: "idx_documents_created") // 관리자 지표: 기간별 문서 생성 수
   @@index([finalizedAt], map: "idx_documents_finalized") // 관리자 지표: 최종 채택일 기준 집계
   // 한글 검색용 FULLTEXT. Prisma 스키마로는 ngram 파서를 지정할 수 없어서
@@ -228,12 +247,15 @@ model Draft {
   status        DraftStatus @default(GENERATING)
   failReason    FailReason? @map("fail_reason") /// FAILED일 때만
   errorMessage  String?     @map("error_message") @db.VarChar(1000) /// AI 서버 요청 실패 내용이나 AI 서버가 준 에러 메시지 (FAILED일 때만, 길면 잘라서 저장)
+  requestedBy   BigInt?     @map("requested_by") @db.UnsignedBigInt /// 이번 회차를 요청한 회원 (첫 생성·AI 보완·다시 시도). 탈퇴로 영구 삭제되면 NULL
   createdAt     DateTime    @default(now()) @map("created_at") @db.DateTime(3) /// 생성 요청(시도 시작) 일시
 
-  document  Document        @relation(fields: [documentId], references: [documentId], onDelete: Cascade, map: "fk_drafts_document")
-  parent    Draft?          @relation("DraftRevision", fields: [parentDraftId], references: [draftId], onDelete: SetNull, map: "fk_drafts_parent")
-  children  Draft[]         @relation("DraftRevision")
+  document  Document          @relation(fields: [documentId], references: [documentId], onDelete: Cascade, map: "fk_drafts_document")
+  requester User?             @relation("DraftRequester", fields: [requestedBy], references: [userId], onDelete: SetNull, map: "fk_drafts_requester")
+  parent    Draft?            @relation("DraftRevision", fields: [parentDraftId], references: [draftId], onDelete: SetNull, map: "fk_drafts_parent")
+  children  Draft[]           @relation("DraftRevision")
   feedbacks DraftFeedback[]
+  versions  DocumentVersion[]
 
   @@index([documentId, versionNo], map: "idx_drafts_version") // 재시도는 같은 회차 번호로 새 행을 만들어서 UNIQUE가 아님
   @@index([parentDraftId], map: "idx_drafts_parent")
@@ -257,4 +279,116 @@ model DraftFeedback {
 
   @@unique([draftId, reason], map: "uk_draft_feedbacks")
   @@map("draft_feedbacks")
+}
+
+// ---------------------------------------------------------------------
+// 4-1. 저장 이력 (2026-11-13 다시 추가)
+//      초안 회차마다 AI가 만든 원본과 직접 저장·복원을 따로 쌓고, 채택 뒤 지식 문서도 최초 채택·직접 저장·복원을 쌓는다.
+//      drafts.content·documents.content는 지금처럼 "현재 내용"이고, 이 테이블은 그 시점의 복사본(스냅숏)
+// ---------------------------------------------------------------------
+
+enum VersionSource {
+  AI_GENERATED // 초안 회차: AI가 만든 원본 (생성·보완 결과를 받은 순간)
+  MANUAL_SAVE // 직접 저장 (초안 직접 수정, 지식 문서 수정)
+  RESTORE // 이전 버전으로 복원
+  ACCEPTED // 지식 문서: 최초 채택 (채택한 회차의 내용)
+}
+
+/// 저장 1번 = 1행. draft_id가 있으면 그 회차의 이력, NULL이면 채택 뒤 지식 문서의 이력
+model DocumentVersion {
+  documentVersionId BigInt        @id @default(autoincrement()) @map("document_version_id") @db.UnsignedBigInt
+  documentId        BigInt        @map("document_id") @db.UnsignedBigInt
+  draftId           BigInt?       @map("draft_id") @db.UnsignedBigInt /// 회차 이력이면 그 초안, 지식 문서 이력이면 NULL
+  versionNo         Int           @map("version_no") @db.UnsignedInt /// 같은 이력(회차 또는 지식 문서) 안에서 1부터
+  source            VersionSource
+  restoredFromId    BigInt?       @map("restored_from_id") @db.UnsignedBigInt /// RESTORE일 때 되돌린 버전
+  title             String?       @db.VarChar(255)
+  content           String?       @db.LongText
+  summary           String?       @db.VarChar(512)
+  category          Category?
+  keywords          Json?
+  savedBy           BigInt?       @map("saved_by") @db.UnsignedBigInt /// 저장한 회원 (AI_GENERATED는 그 회차를 요청한 회원). 탈퇴로 영구 삭제되면 NULL
+  createdAt         DateTime      @default(now()) @map("created_at") @db.DateTime(3)
+
+  document     Document          @relation(fields: [documentId], references: [documentId], onDelete: Cascade, map: "fk_document_versions_document")
+  draft        Draft?            @relation(fields: [draftId], references: [draftId], onDelete: Cascade, map: "fk_document_versions_draft")
+  restoredFrom DocumentVersion?  @relation("VersionRestore", fields: [restoredFromId], references: [documentVersionId], onDelete: SetNull, map: "fk_document_versions_restored_from")
+  restores     DocumentVersion[] @relation("VersionRestore")
+  saver        User?             @relation(fields: [savedBy], references: [userId], onDelete: SetNull, map: "fk_document_versions_saver")
+
+  @@index([documentId, draftId, versionNo], map: "idx_document_versions_history") // 회차·지식 문서별 이력 목록
+  @@index([draftId], map: "idx_document_versions_draft")
+  @@map("document_versions")
+}
+
+// ---------------------------------------------------------------------
+// 5. 팀 워크스페이스 (2026-11-12)
+//    개인 워크스페이스는 테이블 없이 "workspace_id가 NULL인 내 자료"로 본다
+// ---------------------------------------------------------------------
+
+/// 팀 1개 = 1행
+model Workspace {
+  workspaceId BigInt    @id @default(autoincrement()) @map("workspace_id") @db.UnsignedBigInt
+  name        String    @db.VarChar(60) /// 팀 이름 1~60자. 같은 이름의 팀도 따로 만들 수 있음 (UNIQUE 아님)
+  description String    @default("") @db.VarChar(500) /// 팀 소개 (0~500자)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.DateTime(3)
+  deletedAt   DateTime? @map("deleted_at") @db.DateTime(3) /// 팀 삭제 일시. 복구 API는 없음. 진행 중이던 AI 생성 결과도 저장하지 않음
+
+  members       WorkspaceMember[]
+  invitations   WorkspaceInvitation[]
+  conversations Conversation[]
+  documents     Document[]
+
+  @@map("workspaces")
+}
+
+/// 소유자 OWNER(팀당 1명), 관리자 ADMIN, 일반 MEMBER
+enum WorkspaceRole {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
+/// 팀 구성원. 나가기·내보내기는 행을 지운다 (다시 초대받으면 새 행)
+model WorkspaceMember {
+  workspaceMemberId BigInt        @id @default(autoincrement()) @map("workspace_member_id") @db.UnsignedBigInt
+  workspaceId       BigInt        @map("workspace_id") @db.UnsignedBigInt
+  userId            BigInt        @map("user_id") @db.UnsignedBigInt
+  role              WorkspaceRole @default(MEMBER)
+  joinedAt          DateTime      @default(now()) @map("joined_at") @db.DateTime(3) /// 참여일 (팀을 만들거나 초대를 수락한 일시)
+
+  workspace Workspace @relation(fields: [workspaceId], references: [workspaceId], onDelete: Cascade, map: "fk_workspace_members_workspace")
+  user      User      @relation(fields: [userId], references: [userId], onDelete: Cascade, map: "fk_workspace_members_user")
+
+  @@unique([workspaceId, userId], map: "uk_workspace_members")
+  @@index([userId], map: "idx_workspace_members_user") // 내 팀 목록
+  @@map("workspace_members")
+}
+
+/// 초대는 만료되지 않는다 (다현 결정 2026-11-13). 응답하거나 취소할 때까지 PENDING
+enum InvitationStatus {
+  PENDING // 대기 중
+  ACCEPTED // 수락 → workspace_members 행 생성
+  DECLINED // 거절
+  CANCELED // 소유자·관리자가 취소
+}
+
+/// 이메일로 기존 회원을 초대. 초대 1번 = 1행 (거절·취소 뒤 다시 초대하면 새 행)
+model WorkspaceInvitation {
+  workspaceInvitationId BigInt           @id @default(autoincrement()) @map("workspace_invitation_id") @db.UnsignedBigInt
+  workspaceId           BigInt           @map("workspace_id") @db.UnsignedBigInt
+  inviterId             BigInt?          @map("inviter_id") @db.UnsignedBigInt /// 초대한 회원 (탈퇴로 영구 삭제되면 NULL)
+  inviteeId             BigInt           @map("invitee_id") @db.UnsignedBigInt /// 초대받은 회원 (보낼 때 이메일로 찾음)
+  status                InvitationStatus @default(PENDING)
+  respondedAt           DateTime?        @map("responded_at") @db.DateTime(3) /// 수락·거절·취소 일시
+  createdAt             DateTime         @default(now()) @map("created_at") @db.DateTime(3)
+
+  workspace Workspace @relation(fields: [workspaceId], references: [workspaceId], onDelete: Cascade, map: "fk_workspace_invitations_workspace")
+  inviter   User?     @relation("InvitationInviter", fields: [inviterId], references: [userId], onDelete: SetNull, map: "fk_workspace_invitations_inviter")
+  invitee   User      @relation("InvitationInvitee", fields: [inviteeId], references: [userId], onDelete: Cascade, map: "fk_workspace_invitations_invitee")
+
+  @@index([workspaceId, status], map: "idx_workspace_invitations_workspace") // 팀의 대기 중 초대
+  @@index([inviteeId, status], map: "idx_workspace_invitations_invitee") // 받은 초대
+  @@map("workspace_invitations")
 }
