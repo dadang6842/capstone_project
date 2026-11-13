@@ -84,6 +84,16 @@ export const ERRORS = {
         status: 409,
         message: "최종 채택 전인 문서는 편집할 수 없습니다.",
     },
+
+    // 팀 워크스페이스
+    WORKSPACE_NOT_FOUND: { no: 6001, title: "팀 없음", status: 404, message: "팀을 찾을 수 없습니다." },
+    MEMBER_NOT_FOUND: { no: 6002, title: "팀 구성원 아님", status: 404, message: "팀 구성원을 찾을 수 없습니다." },
+    OWNER_CANNOT_LEAVE: {
+        no: 6009,
+        title: "소유자 나가기·역할 변경 불가",
+        status: 409,
+        message: "소유자는 소유권을 이전한 뒤에 나가거나 역할을 바꿀 수 있습니다.",
+    },
 } as const satisfies Record<string, { no: number; title: string; status: number; message: string }>;
 
 export type ErrorCode = keyof typeof ERRORS;
