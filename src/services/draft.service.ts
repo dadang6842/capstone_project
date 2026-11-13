@@ -35,8 +35,8 @@ async function requireDraftEditor(
 }
 
 // 채택·직접 수정할 수 있는 초안을 찾는다: 고칠 권한이 있고, 생성이 끝난 회차(GENERATED)이고, 문서가 아직 채택 전(DRAFT_GENERATED)이며
-// AI 보완이 진행 중이 아니어야 한다
-async function findEditableDraft(userId: number, draftId: number) {
+// AI 보완이 진행 중이 아니어야 한다. 회차 버전 복원(HIST-04)에서도 쓴다
+export async function findEditableDraft(userId: number, draftId: number) {
     const draft = await draftRepository.findWithDocumentState(BigInt(draftId));
     if (!draft) throw new AppError("DRAFT_NOT_FOUND");
     await requireDraftEditor(userId, draft.document);

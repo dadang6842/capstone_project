@@ -84,6 +84,7 @@ export const ERRORS = {
         status: 409,
         message: "최종 채택 전인 문서는 편집할 수 없습니다.",
     },
+    VERSION_NOT_FOUND: { no: 5003, title: "저장 이력 없음", status: 404, message: "저장 이력을 찾을 수 없습니다." },
 
     // 팀 워크스페이스
     WORKSPACE_NOT_FOUND: { no: 6001, title: "팀 없음", status: 404, message: "팀을 찾을 수 없습니다." },

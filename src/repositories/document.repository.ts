@@ -2,6 +2,7 @@ import { prisma } from "../config/prisma.js";
 import type { Category, FailReason, Prisma } from "../generated/prisma/client.js";
 import type { DraftResult } from "../utils/aiServer.js";
 import type { SpaceFilter } from "../services/workspaceAccess.js";
+import { versionRepository } from "./version.repository.js";
 
 // 생성 요청자·최근 수정자 표시용
 const userRef = { select: { userId: true, nickname: true } } as const;
@@ -135,6 +136,7 @@ export const documentRepository = {
     // 지식 문서 직접 수정(DOC-03): 받은 제목·본문만 덮어쓰고, 키워드를 받았으면 통째로 바꾼다(이전 내용은 보관하지 않음)
     // 키워드만 바꿔도 수정일이 바뀌도록 updated_at은 직접 넣는다. 수정한 회원은 최근 수정자(last_edited_by)로. 그 사이 문서가 삭제됐으면 null
     // 키워드 UNIQUE가 대소문자를 구분하지 않아서 skipDuplicates로 겹치는 값은 건너뛴다
+    // 저장한 결과는 지식 문서 이력에 MANUAL_SAVE로 남긴다
     updateFinalized(
         documentId: bigint,
         editorId: bigint,
@@ -154,15 +156,30 @@ export const documentRepository = {
                     skipDuplicates: true,
                 });
             }
-            return tx.document.findUniqueOrThrow({
+            const saved = await tx.document.findUniqueOrThrow({
                 where: { documentId },
                 select: {
                     documentId: true,
                     title: true,
+                    content: true,
+                    summary: true,
+                    category: true,
                     updatedAt: true,
                     keywords: { orderBy: { documentKeywordId: "asc" }, select: { keyword: true } },
                 },
             });
+            await versionRepository.add(tx, {
+                documentId,
+                draftId: null,
+                source: "MANUAL_SAVE",
+                savedBy: editorId,
+                title: saved.title,
+                content: saved.content,
+                summary: saved.summary,
+                category: saved.category,
+                keywords: saved.keywords.map(({ keyword }) => keyword),
+            });
+            return saved;
         });
     },
 
@@ -192,7 +209,7 @@ export const documentRepository = {
         });
     },
 
-    // 첫 초안 생성 완료(AI-01 응답): 초안에 결과를 저장하고 GENERATED, 문서 DRAFT_GENERATED.
+    // 첫 초안 생성 완료(AI-01 응답): 초안에 결과를 저장하고 GENERATED, 문서 DRAFT_GENERATED. 받은 결과는 1회차 이력에 AI_GENERATED로 남긴다.
     // 기다리는 사이 상태가 바뀌었거나(서버 재시작으로 실패 처리됨 등) 팀이 삭제됐으면 저장하지 않는다 (false)
     saveFirstDraftResult(documentId: bigint, draftId: bigint, result: DraftResult) {
         return prisma.$transaction(async (tx) => {
@@ -204,6 +221,17 @@ export const documentRepository = {
             await tx.document.updateMany({
                 where: { documentId, status: "GENERATING" },
                 data: { status: "DRAFT_GENERATED" },
+            });
+            const { requestedBy } = await tx.draft.findUniqueOrThrow({
+                where: { draftId },
+                select: { requestedBy: true },
+            });
+            await versionRepository.add(tx, {
+                documentId,
+                draftId,
+                source: "AI_GENERATED",
+                savedBy: requestedBy,
+                ...result,
             });
             return true;
         });

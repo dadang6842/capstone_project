@@ -2,6 +2,7 @@ import { prisma } from "../config/prisma.js";
 import type { Category, FailReason, FeedbackReason } from "../generated/prisma/client.js";
 import type { DraftResult } from "../utils/aiServer.js";
 import { messagesInclude } from "./conversation.repository.js";
+import { versionRepository } from "./version.repository.js";
 
 const ERROR_MESSAGE_MAX = 1000;
 
@@ -126,18 +127,32 @@ export const draftRepository = {
         });
     },
 
-    // AI 보완 완료(AI-03 응답): 새 회차에 결과를 저장하고 GENERATED (문서는 DRAFT_GENERATED 그대로).
+    // AI 보완 완료(AI-03 응답): 새 회차에 결과를 저장하고 GENERATED (문서는 DRAFT_GENERATED 그대로). 받은 결과는 그 회차 이력에 AI_GENERATED로.
     // 기다리는 사이 상태가 바뀌었거나 팀이 삭제됐으면 저장하지 않는다 (false)
-    async saveRevisionResult(draftId: bigint, result: DraftResult) {
-        const { count } = await prisma.draft.updateMany({
-            where: {
+    saveRevisionResult(draftId: bigint, result: DraftResult) {
+        return prisma.$transaction(async (tx) => {
+            const { count } = await tx.draft.updateMany({
+                where: {
+                    draftId,
+                    status: "GENERATING",
+                    document: { OR: [{ workspaceId: null }, { workspace: { deletedAt: null } }] },
+                },
+                data: { ...result, status: "GENERATED" },
+            });
+            if (count === 0) return false;
+            const { documentId, requestedBy } = await tx.draft.findUniqueOrThrow({
+                where: { draftId },
+                select: { documentId: true, requestedBy: true },
+            });
+            await versionRepository.add(tx, {
+                documentId,
                 draftId,
-                status: "GENERATING",
-                document: { OR: [{ workspaceId: null }, { workspace: { deletedAt: null } }] },
-            },
-            data: { ...result, status: "GENERATED" },
+                source: "AI_GENERATED",
+                savedBy: requestedBy,
+                ...result,
+            });
+            return true;
         });
-        return count > 0;
     },
 
     // AI 보완 실패: 새 회차만 FAILED로 (문서는 DRAFT_GENERATED 그대로, 기존 회차 유지)
@@ -188,7 +203,8 @@ export const draftRepository = {
     },
 
     // 최종 채택: 문서에 초안 내용을 복사하고 FINALIZED, 초안 ACCEPTED, 키워드를 document_keywords로 (한 트랜잭션)
-    // 문서가 DRAFT_GENERATED일 때만 바꿔서, 두 회차를 동시에 채택해도 하나만 된다 (아니면 null). 채택한 회원이 최근 수정자
+    // 문서가 DRAFT_GENERATED일 때만 바꿔서, 두 회차를 동시에 채택해도 하나만 된다 (아니면 null). 채택한 회원이 최근 수정자.
+    // 채택한 내용은 지식 문서 이력의 첫 버전(ACCEPTED)이 된다
     accept(
         draft: {
             draftId: bigint;
@@ -222,16 +238,40 @@ export const draftRepository = {
                 data: draft.keywords.map((keyword) => ({ documentId: draft.documentId, keyword })),
                 skipDuplicates: true,
             });
+            await versionRepository.add(tx, {
+                documentId: draft.documentId,
+                draftId: null,
+                source: "ACCEPTED",
+                savedBy: editorId,
+                title: draft.title,
+                content: draft.content,
+                summary: draft.summary,
+                category: draft.category,
+                keywords: draft.keywords,
+            });
             return finalizedAt;
         });
     },
 
-    // 직접 수정: 받은 제목·본문만 덮어쓰고 수정한 회원을 문서의 최근 수정자로. 그 사이 상태가 바뀌었으면 false
+    // 직접 수정: 받은 제목·본문만 덮어쓰고 수정한 회원을 문서의 최근 수정자로. 저장한 결과는 그 회차 이력에 MANUAL_SAVE로.
+    // 그 사이 상태가 바뀌었으면 false
     updateContent(draftId: bigint, documentId: bigint, editorId: bigint, data: { title?: string; content?: string }) {
         return prisma.$transaction(async (tx) => {
             const { count } = await tx.draft.updateMany({ where: { draftId, status: "GENERATED" }, data });
             if (count === 0) return false;
             await tx.document.update({ where: { documentId }, data: { lastEditedBy: editorId } });
+            const saved = await tx.draft.findUniqueOrThrow({ where: { draftId } });
+            await versionRepository.add(tx, {
+                documentId,
+                draftId,
+                source: "MANUAL_SAVE",
+                savedBy: editorId,
+                title: saved.title,
+                content: saved.content,
+                summary: saved.summary,
+                category: saved.category,
+                keywords: Array.isArray(saved.keywords) ? (saved.keywords as string[]) : [],
+            });
             return true;
         });
     },
