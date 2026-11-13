@@ -125,11 +125,17 @@ export const documentRepository = {
         });
     },
 
-    // 직접 수정·삭제 전 확인용: 요청자·공간·상태·삭제 여부만
+    // 직접 수정·삭제·복원 전 확인용: 요청자·공간·상태·삭제 여부, 진행 중인 AI 보완 초안(있으면 1개)
     findState(documentId: bigint) {
         return prisma.document.findUnique({
             where: { documentId },
-            select: { userId: true, workspaceId: true, status: true, deletedAt: true },
+            select: {
+                userId: true,
+                workspaceId: true,
+                status: true,
+                deletedAt: true,
+                drafts: { where: { status: "GENERATING" }, select: { draftId: true }, take: 1 },
+            },
         });
     },
 
@@ -183,12 +189,65 @@ export const documentRepository = {
         });
     },
 
-    // 지식 문서 삭제(DOC-04): 소프트 삭제. 연결된 대화·키워드·초안은 그대로 둔다. 이미 삭제됐거나 최종 문서가 아니면 0건
-    async softDeleteFinalized(documentId: bigint) {
+    // 문서 삭제(DOC-04): 휴지통으로 옮긴다(소프트 삭제 + 삭제한 회원). 연결된 대화·키워드·초안·이력은 그대로 둔다.
+    // 이미 삭제됐거나 생성·AI 보완이 진행 중이면 0건 (확인과 저장 사이에 상태가 바뀐 경우까지 막음)
+    async moveToTrash(documentId: bigint, deleterId: bigint) {
         const { count } = await prisma.document.updateMany({
-            where: { documentId, status: "FINALIZED", deletedAt: null },
-            data: { deletedAt: new Date() },
+            where: {
+                documentId,
+                deletedAt: null,
+                status: { not: "GENERATING" },
+                drafts: { none: { status: "GENERATING" } },
+            },
+            data: { deletedAt: new Date(), deletedBy: deleterId },
         });
+        return count > 0;
+    },
+
+    // 휴지통 목록(TRASH-01): 이 공간의 삭제한 문서를 삭제일 최신순으로 한 페이지와 전체 개수.
+    // 미채택 문서는 제목이 없어서 생성이 끝난 최신 회차의 제목을 같이 가져온다
+    findTrashPage(space: SpaceFilter, { skip, take }: { skip: number; take: number }) {
+        const where: Prisma.DocumentWhereInput = { ...space, deletedAt: { not: null } };
+        return prisma.$transaction([
+            prisma.document.findMany({
+                where,
+                orderBy: [{ deletedAt: "desc" }, { documentId: "desc" }],
+                skip,
+                take,
+                select: {
+                    documentId: true,
+                    userId: true,
+                    title: true,
+                    status: true,
+                    category: true,
+                    deletedAt: true,
+                    user: userRef,
+                    deleter: userRef,
+                    drafts: {
+                        where: { status: "GENERATED" },
+                        orderBy: { draftId: "desc" },
+                        take: 1,
+                        select: { title: true },
+                    },
+                },
+            }),
+            prisma.document.count({ where }),
+        ]);
+    },
+
+    // 복원(TRASH-02): 휴지통에서 꺼낸다. 휴지통에 없으면(이미 복원·영구 삭제) false
+    async restoreFromTrash(documentId: bigint) {
+        const { count } = await prisma.document.updateMany({
+            where: { documentId, deletedAt: { not: null } },
+            data: { deletedAt: null, deletedBy: null },
+        });
+        return count > 0;
+    },
+
+    // 영구 삭제(TRASH-03): 휴지통에 있는 문서 행을 지운다. 초안·보완 항목·키워드·이력·대화 연결이 CASCADE로 같이 지워진다(대화 자체는 남음).
+    // 휴지통에 없으면 false
+    async deletePermanently(documentId: bigint) {
+        const { count } = await prisma.document.deleteMany({ where: { documentId, deletedAt: { not: null } } });
         return count > 0;
     },
 

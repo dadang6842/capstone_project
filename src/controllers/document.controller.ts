@@ -7,6 +7,7 @@ import type {
     DocumentIdParams,
     ListDocumentsQuery,
     ListPendingDocumentsQuery,
+    ListTrashQuery,
     UpdateDocumentBody,
 } from "../schemas/document.schema.js";
 
@@ -38,7 +39,7 @@ export const documentController = {
     async delete(req: Request, res: Response) {
         const { documentId } = req.params as unknown as DocumentIdParams;
         await documentService.delete(req.user.userId, documentId);
-        logger.info("지식 문서를 삭제하였습니다.", { documentId });
+        logger.info("문서를 휴지통으로 옮겼습니다.", { documentId });
         sendSuccess(res, null);
     },
 
@@ -54,5 +55,24 @@ export const documentController = {
             req.query as unknown as ListPendingDocumentsQuery,
         );
         sendSuccess(res, result);
+    },
+
+    async listTrash(req: Request, res: Response) {
+        const result = await documentService.listTrash(req.user.userId, req.query as unknown as ListTrashQuery);
+        sendSuccess(res, result);
+    },
+
+    async restore(req: Request, res: Response) {
+        const { documentId } = req.params as unknown as DocumentIdParams;
+        const result = await documentService.restore(req.user.userId, documentId);
+        logger.info("휴지통에서 문서를 복원하였습니다.", { documentId });
+        sendSuccess(res, result);
+    },
+
+    async deletePermanently(req: Request, res: Response) {
+        const { documentId } = req.params as unknown as DocumentIdParams;
+        await documentService.deletePermanently(req.user.userId, documentId);
+        logger.info("문서를 영구 삭제하였습니다.", { documentId });
+        sendSuccess(res, null);
     },
 };

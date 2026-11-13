@@ -1,6 +1,13 @@
 import { conversationRepository, type ConversationWithMessages } from "../repositories/conversation.repository.js";
 import { documentRepository } from "../repositories/document.repository.js";
-import { canDeleteDocument, getAccess, resolveSpace, spaceFilter } from "./workspaceAccess.js";
+import {
+    canDeleteDocument,
+    findMembership,
+    getAccess,
+    resolveSpace,
+    spaceFilter,
+    type Access,
+} from "./workspaceAccess.js";
 import { AiServerError, requestAnalysis, toAnalysisConversation } from "../utils/aiServer.js";
 import { AppError } from "../utils/appError.js";
 import { logger } from "../utils/logger.js";
@@ -12,6 +19,9 @@ import type {
     DraftHistoryResponse,
     ListDocumentsQuery,
     ListPendingDocumentsQuery,
+    ListTrashQuery,
+    ListTrashResponse,
+    RestoreDocumentResponse,
     ListDocumentsResponse,
     PendingDocumentsResponse,
     UpdateDocumentBody,
@@ -57,6 +67,15 @@ export async function sendAnalysisRequest(
                 logger.error("DATABASE_ERROR", `실패 처리 저장 실패: ${(dbErr as Error).name}`, { documentId }),
             );
     }
+}
+
+// 휴지통에 있는 문서를 복원·영구 삭제할 수 있는지 확인한다 (삭제 권한과 같음)
+async function requireTrashManager(userId: number, documentId: number) {
+    const document = await documentRepository.findState(BigInt(documentId));
+    const access = document?.deletedAt ? await getAccess(userId, document) : null;
+    if (!document || !access) throw new AppError("DOCUMENT_NOT_FOUND");
+    if (!canDeleteDocument(access, document.status === "FINALIZED")) throw new AppError("FORBIDDEN");
+    return document;
 }
 
 export const documentService = {
@@ -196,20 +215,64 @@ export const documentService = {
         };
     },
 
-    // 지식 문서 삭제(A07 ⑤, 확인 팝업 P03). A07에서만 삭제하므로 최종 채택한 문서만 지운다.
-    // 볼 수 없는·삭제한·채택 전 문서는 상세(DOC-02)와 같이 404. 연결된 원본 대화는 지우지 않는다
-    // 팀 최종 문서는 소유자·관리자만 지울 수 있다 (일반 구성원은 내가 만든 문서도 403)
+    // 문서 삭제(A07 ⑤·A05, 확인 팝업 P03): 휴지통으로 옮긴다. 최종 문서와 미채택 문서(검토 중·생성 실패) 모두 지울 수 있다.
+    // 볼 수 없는·이미 삭제한 문서는 404, 첫 초안 생성 중이거나 AI 보완 중이면 409. 연결된 원본 대화는 지우지 않는다
+    // 팀: 최종 문서는 소유자·관리자만, 미채택 문서는 소유자·관리자 + 최초 생성 요청자 (아니면 403)
     async delete(userId: number, documentId: number): Promise<void> {
         const document = await documentRepository.findState(BigInt(documentId));
-        const access =
-            document && !document.deletedAt && document.status === "FINALIZED"
-                ? await getAccess(userId, document)
-                : null;
-        if (!access) throw new AppError("DOCUMENT_NOT_FOUND");
-        if (!canDeleteDocument(access, true)) throw new AppError("FORBIDDEN");
-        // 확인한 뒤 그 사이에 이미 삭제된 경우(삭제 버튼을 두 번 누름 등)
-        if (!(await documentRepository.softDeleteFinalized(BigInt(documentId))))
-            throw new AppError("DOCUMENT_NOT_FOUND");
+        const access = document && !document.deletedAt ? await getAccess(userId, document) : null;
+        if (!document || !access) throw new AppError("DOCUMENT_NOT_FOUND");
+        if (!canDeleteDocument(access, document.status === "FINALIZED")) throw new AppError("FORBIDDEN");
+        if (document.status === "GENERATING" || document.drafts.length > 0) throw new AppError("INVALID_DRAFT_STATUS");
+
+        if (!(await documentRepository.moveToTrash(BigInt(documentId), BigInt(userId)))) {
+            // 확인한 뒤 그 사이에 이미 삭제됐거나(삭제 버튼을 두 번 누름 등) 생성이 시작된 경우
+            const latest = await documentRepository.findState(BigInt(documentId));
+            throw new AppError(!latest || latest.deletedAt ? "DOCUMENT_NOT_FOUND" : "INVALID_DRAFT_STATUS");
+        }
+    },
+
+    // 휴지통 목록(사이드바 "삭제한 문서"). 공간은 지식 문서 목록과 같은 기준이고, 문서마다 내가 복원·영구 삭제할 수 있는지(canRestore)를 준다
+    async listTrash(userId: number, { page, limit, workspaceId }: ListTrashQuery): Promise<ListTrashResponse> {
+        // 팀이면 내 역할로 문서별 권한을 계산한다 (개인 공간은 전부 내 문서라 항상 가능)
+        const manager =
+            workspaceId === undefined ? true : (await findMembership(userId, workspaceId)).role !== "MEMBER";
+        const space = workspaceId === undefined ? null : BigInt(workspaceId);
+        const [documents, totalCount] = await documentRepository.findTrashPage(spaceFilter(userId, space), {
+            skip: (page - 1) * limit,
+            take: limit,
+        });
+        return {
+            ...toPageInfo(page, limit, totalCount),
+            documents: documents.map((document) => {
+                const access: Access = { manager, mine: document.userId === BigInt(userId) };
+                const finalized = document.status === "FINALIZED";
+                return {
+                    documentId: Number(document.documentId),
+                    // 미채택 문서는 문서 제목이 없어서 생성이 끝난 최신 회차의 제목 (생성 실패 문서는 null)
+                    title: finalized ? document.title : (document.drafts[0]?.title ?? null),
+                    status: document.status as "DRAFT_GENERATED" | "FAILED" | "FINALIZED",
+                    category: document.category,
+                    requester: toUserRef(document.user),
+                    deletedBy: toUserRef(document.deleter),
+                    deletedAt: document.deletedAt as Date,
+                    canRestore: canDeleteDocument(access, finalized),
+                };
+            }),
+        };
+    },
+
+    // 휴지통에서 복원. 권한은 삭제와 같다. 휴지통에 없는 문서(삭제 안 함·이미 복원·영구 삭제)나 볼 수 없는 문서는 404
+    async restore(userId: number, documentId: number): Promise<RestoreDocumentResponse> {
+        const document = await requireTrashManager(userId, documentId);
+        if (!(await documentRepository.restoreFromTrash(BigInt(documentId)))) throw new AppError("DOCUMENT_NOT_FOUND");
+        return { documentId, status: document.status as RestoreDocumentResponse["status"] };
+    },
+
+    // 휴지통에서 영구 삭제 (복구 불가). 권한은 복원과 같다
+    async deletePermanently(userId: number, documentId: number): Promise<void> {
+        await requireTrashManager(userId, documentId);
+        if (!(await documentRepository.deletePermanently(BigInt(documentId)))) throw new AppError("DOCUMENT_NOT_FOUND");
     },
 
     // 한 문서의 초안 회차 목록 (본문 제외). 초안 검토 화면의 회차 선택에 쓴다. 볼 수 없는·삭제한 문서는 404

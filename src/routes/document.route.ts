@@ -12,7 +12,10 @@ import {
     listDocumentsQuerySchema,
     listDocumentsResponseSchema,
     listPendingDocumentsQuerySchema,
+    listTrashQuerySchema,
+    listTrashResponseSchema,
     pendingDocumentsResponseSchema,
+    restoreDocumentResponseSchema,
     updateDocumentBodySchema,
     updateDocumentResponseSchema,
 } from "../schemas/document.schema.js";
@@ -97,6 +100,77 @@ router.get(
     authenticate,
     validate({ query: listPendingDocumentsQuerySchema }),
     documentController.listPending,
+);
+
+// /:documentId 라우트보다 먼저 둔다 ("trash"가 문서 아이디로 읽히지 않게)
+registry.registerPath({
+    method: "get",
+    path: "/documents/trash",
+    tags: ["Document"],
+    summary: "휴지통 목록 (TRASH-01)",
+    description:
+        "화면: 사이드바 '삭제한 문서'. 삭제(DOC-04)한 문서를 삭제일 최신순으로 20개씩 준다. 최종 문서와 미채택 문서(검토 중·생성 실패)가 같이 나오고 status로 구분한다. " +
+        "workspaceId를 넣으면 그 팀의 휴지통(팀원 누구나 볼 수 있음), 생략하면 내 개인 휴지통. canRestore가 false면 복원·영구 삭제 버튼을 숨긴다. 자동으로 비우지 않는다.",
+    security: bearerAuth,
+    request: { query: listTrashQuerySchema },
+    responses: {
+        200: {
+            description: "휴지통 목록",
+            content: { "application/json": { schema: successResponse(listTrashResponseSchema) } },
+        },
+        ...errorResponses("VALIDATION_ERROR", "UNAUTHORIZED", "TOKEN_EXPIRED", "WORKSPACE_NOT_FOUND"),
+    },
+});
+router.get("/trash", authenticate, validate({ query: listTrashQuerySchema }), documentController.listTrash);
+
+registry.registerPath({
+    method: "post",
+    path: "/documents/{documentId}/restore",
+    tags: ["Document"],
+    summary: "휴지통에서 복원 (TRASH-02)",
+    description:
+        "화면: 삭제한 문서의 '복원'. 문서를 휴지통에서 꺼내 원래 목록(최종 문서는 지식 문서 목록, 미채택 문서는 초안 검토·대화 목록)으로 돌려놓는다. " +
+        "권한은 삭제와 같다: 팀 최종 문서는 소유자·관리자만, 미채택 문서는 소유자·관리자·생성 요청자 (아니면 403). 휴지통에 없는 문서는 404.",
+    security: bearerAuth,
+    request: { params: documentIdParamsSchema },
+    responses: {
+        200: {
+            description: "복원 완료",
+            content: { "application/json": { schema: successResponse(restoreDocumentResponseSchema) } },
+        },
+        ...errorResponses("VALIDATION_ERROR", "UNAUTHORIZED", "TOKEN_EXPIRED", "FORBIDDEN", "DOCUMENT_NOT_FOUND"),
+    },
+});
+router.post(
+    "/:documentId/restore",
+    authenticate,
+    validate({ params: documentIdParamsSchema }),
+    documentController.restore,
+);
+
+registry.registerPath({
+    method: "delete",
+    path: "/documents/{documentId}/permanent",
+    tags: ["Document"],
+    summary: "휴지통에서 영구 삭제 (TRASH-03)",
+    description:
+        "화면: 삭제한 문서의 '영구 삭제' (확인 팝업). 문서와 초안·키워드·저장 이력·대화 연결을 모두 지운다(복구 불가). 원본 대화는 남는다. " +
+        "권한은 복원과 같다. 휴지통에 없는 문서는 404 (먼저 DOC-04로 휴지통에 옮겨야 함).",
+    security: bearerAuth,
+    request: { params: documentIdParamsSchema },
+    responses: {
+        200: {
+            description: "영구 삭제 완료 (data: null)",
+            content: { "application/json": { schema: successResponse(z.null()) } },
+        },
+        ...errorResponses("VALIDATION_ERROR", "UNAUTHORIZED", "TOKEN_EXPIRED", "FORBIDDEN", "DOCUMENT_NOT_FOUND"),
+    },
+});
+router.delete(
+    "/:documentId/permanent",
+    authenticate,
+    validate({ params: documentIdParamsSchema }),
+    documentController.deletePermanently,
 );
 
 registry.registerPath({
@@ -185,11 +259,12 @@ registry.registerPath({
     method: "delete",
     path: "/documents/{documentId}",
     tags: ["Document"],
-    summary: "지식 문서 삭제 (DOC-04)",
+    summary: "문서 삭제 - 휴지통으로 (DOC-04)",
     description:
-        "화면: A07 ⑤ 문서 삭제 → P03 삭제 확인 → A06. 최종 채택한 문서를 소프트 삭제해 목록·통계에서 뺀다(휴지통·복구 없음). " +
-        "연결된 원본 대화는 지우지 않는다. 채택 전 문서, 다른 회원·이미 삭제한 문서는 404. " +
-        "팀 최종 문서는 소유자·관리자만 지울 수 있다(일반 구성원은 본인이 만든 문서도 403 FORBIDDEN).",
+        "화면: A07 ⑤ 문서 삭제·A05 초안 문서 삭제 → P03 삭제 확인. 문서를 휴지통으로 옮겨 목록에서 뺀다(복원 TRASH-02, 영구 삭제 TRASH-03). " +
+        "최종 문서와 미채택 문서(검토 중·생성 실패) 모두 지울 수 있고, 첫 초안 생성 중이거나 AI 보완 중이면 409 INVALID_DRAFT_STATUS. " +
+        "연결된 원본 대화는 지우지 않는다. 다른 회원·이미 삭제한 문서는 404. " +
+        "팀 권한: 최종 문서는 소유자·관리자만(일반 구성원은 본인이 만든 문서도 403), 미채택 문서는 소유자·관리자·생성 요청자.",
     security: bearerAuth,
     request: { params: documentIdParamsSchema },
     responses: {
@@ -197,7 +272,14 @@ registry.registerPath({
             description: "삭제 완료 (data: null)",
             content: { "application/json": { schema: successResponse(z.null()) } },
         },
-        ...errorResponses("VALIDATION_ERROR", "UNAUTHORIZED", "TOKEN_EXPIRED", "FORBIDDEN", "DOCUMENT_NOT_FOUND"),
+        ...errorResponses(
+            "VALIDATION_ERROR",
+            "UNAUTHORIZED",
+            "TOKEN_EXPIRED",
+            "FORBIDDEN",
+            "DOCUMENT_NOT_FOUND",
+            "INVALID_DRAFT_STATUS",
+        ),
     },
 });
 router.delete("/:documentId", authenticate, validate({ params: documentIdParamsSchema }), documentController.delete);

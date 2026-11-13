@@ -240,6 +240,53 @@ export const updateDocumentResponseSchema = z
     })
     .meta({ id: "UpdateDocumentResponse" });
 
+// 휴지통 목록(TRASH-01)
+export const listTrashQuerySchema = pageQuerySchema.extend(workspaceIdQueryShape);
+
+export const trashDocumentSchema = z
+    .object({
+        documentId: z.number().int().meta({ example: 15 }),
+        title: z
+            .string()
+            .nullable()
+            .meta({
+                example: "Prisma로 ERD 옮기기",
+                description:
+                    "최종 문서는 문서 제목, 미채택 문서는 생성이 끝난 최신 회차의 제목 (생성 실패 문서는 null)",
+            }),
+        status: z
+            .enum(["DRAFT_GENERATED", "FAILED", "FINALIZED"])
+            .meta({ description: "FINALIZED면 최종 문서, 아니면 미채택 문서(검토 중·생성 실패)" }),
+        category: categorySchema.nullable().meta({ description: "지식 유형 (미채택 문서는 null)" }),
+        requester: userRefSchema.meta({ description: "생성 요청자" }),
+        deletedBy: userRefSchema.meta({ description: "휴지통으로 옮긴 회원" }),
+        deletedAt: z.date().meta({ description: "삭제 일시" }),
+        canRestore: z
+            .boolean()
+            .meta({
+                description:
+                    "내가 복원·영구 삭제할 수 있는지 (false면 버튼을 숨김). 팀 최종 문서는 소유자·관리자만, 미채택 문서는 소유자·관리자·생성 요청자",
+            }),
+    })
+    .meta({ id: "TrashDocument" });
+
+export const listTrashResponseSchema = z
+    .object({ ...pageInfoShape, documents: z.array(trashDocumentSchema).meta({ description: "삭제일 최신순" }) })
+    .meta({ id: "TrashList" });
+
+// 휴지통에서 복원(TRASH-02)
+export const restoreDocumentResponseSchema = z
+    .object({
+        documentId: z.number().int().meta({ example: 15 }),
+        status: z
+            .enum(["DRAFT_GENERATED", "FAILED", "FINALIZED"])
+            .meta({ description: "복원한 문서의 상태. FINALIZED면 지식 문서 목록, 아니면 초안 검토·대화 목록으로" }),
+    })
+    .meta({ id: "RestoreDocumentResponse" });
+
+export type ListTrashQuery = z.infer<typeof listTrashQuerySchema>;
+export type ListTrashResponse = z.infer<typeof listTrashResponseSchema>;
+export type RestoreDocumentResponse = z.infer<typeof restoreDocumentResponseSchema>;
 export type CreateDocumentBody = z.infer<typeof createDocumentBodySchema>;
 export type CreateDocumentResponse = z.infer<typeof createDocumentResponseSchema>;
 export type DocumentIdParams = z.infer<typeof documentIdParamsSchema>;
