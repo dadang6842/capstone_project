@@ -88,6 +88,26 @@ export const ERRORS = {
     // 팀 워크스페이스
     WORKSPACE_NOT_FOUND: { no: 6001, title: "팀 없음", status: 404, message: "팀을 찾을 수 없습니다." },
     MEMBER_NOT_FOUND: { no: 6002, title: "팀 구성원 아님", status: 404, message: "팀 구성원을 찾을 수 없습니다." },
+    INVITEE_NOT_FOUND: {
+        no: 6003,
+        title: "초대할 회원 없음",
+        status: 404,
+        message: "가입한 회원의 이메일만 초대할 수 있습니다.",
+    },
+    ALREADY_MEMBER: { no: 6004, title: "이미 팀원", status: 409, message: "이미 팀에 참여한 회원입니다." },
+    INVITATION_ALREADY_PENDING: {
+        no: 6005,
+        title: "대기 중인 초대 있음",
+        status: 409,
+        message: "이미 초대를 보내 응답을 기다리는 회원입니다.",
+    },
+    INVITATION_NOT_FOUND: { no: 6006, title: "초대 없음", status: 404, message: "초대를 찾을 수 없습니다." },
+    INVITATION_NOT_PENDING: {
+        no: 6008,
+        title: "이미 처리된 초대",
+        status: 409,
+        message: "이미 수락·거절·취소된 초대입니다.",
+    },
     OWNER_CANNOT_LEAVE: {
         no: 6009,
         title: "소유자 나가기·역할 변경 불가",

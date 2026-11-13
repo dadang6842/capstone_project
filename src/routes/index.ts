@@ -6,6 +6,7 @@ import conversationRouter from "./conversation.route.js";
 import documentRouter from "./document.route.js";
 import draftRouter from "./draft.route.js";
 import workspaceRouter from "./workspace.route.js";
+import invitationRouter from "./invitation.route.js";
 
 const router = Router();
 router.use("/health", healthRouter);
@@ -15,5 +16,6 @@ router.use("/conversations", conversationRouter);
 router.use("/documents", documentRouter);
 router.use("/drafts", draftRouter);
 router.use("/workspaces", workspaceRouter);
+router.use(invitationRouter);
 
 export default router;
