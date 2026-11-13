@@ -5,6 +5,11 @@ export const userRepository = {
         return prisma.user.findUnique({ where: { email } });
     },
 
+    // 팀 초대(INV-01): 탈퇴 요청한 회원은 없는 회원으로 본다
+    findActiveByEmail(email: string) {
+        return prisma.user.findFirst({ where: { email, deletedAt: null } });
+    },
+
     findById(userId: bigint) {
         return prisma.user.findUnique({ where: { userId } });
     },

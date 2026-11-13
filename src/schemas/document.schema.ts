@@ -1,5 +1,11 @@
 import { z } from "zod";
-import { pageInfoShape, pageQuerySchema } from "./common.schema.js";
+import {
+    pageInfoShape,
+    pageQuerySchema,
+    userRefSchema,
+    workspaceIdBodyShape,
+    workspaceIdQueryShape,
+} from "./common.schema.js";
 
 // 문서 생성 요청(DRAFT-01)
 export const createDocumentBodySchema = z
@@ -8,7 +14,12 @@ export const createDocumentBodySchema = z
             .array(z.number().int().positive())
             .min(1)
             .refine((ids) => new Set(ids).size === ids.length, "같은 대화를 두 번 고를 수 없습니다.")
-            .meta({ example: [7, 8], description: "분석할 대화 아이디 (1개 이상, 개수 제한 없음, 중복 불가)" }),
+            .meta({
+                example: [7, 8],
+                description:
+                    "분석할 대화 아이디 (1개 이상, 개수 제한 없음, 중복 불가). 모두 workspaceId 공간의 대화여야 한다",
+            }),
+        ...workspaceIdBodyShape,
     })
     .meta({ id: "CreateDocumentRequest" });
 
@@ -30,20 +41,30 @@ export const documentIdParamsSchema = z.object({
 // 문서의 초안 이력 조회(DRAFT-06). 초안 검토 화면의 회차 선택용이라 생성이 끝난 회차의 아이디·번호만
 export const draftHistoryResponseSchema = z
     .object({
-        latestDraftId: z.number().int().nullable().meta({
-            example: 31,
-            description:
-                "처음 보여 줄 초안. 채택한 회차, 없으면 생성이 끝난 최신 회차 (AI 보완 중인 회차 제외). 볼 초안이 없으면 null",
-        }),
+        latestDraftId: z
+            .number()
+            .int()
+            .nullable()
+            .meta({
+                example: 31,
+                description:
+                    "처음 보여 줄 초안. 채택한 회차, 없으면 생성이 끝난 최신 회차 (AI 보완 중인 회차 제외). 볼 초안이 없으면 null",
+            }),
         revision: z
             .object({
-                draftId: z.number().int().meta({
-                    example: 33,
-                    description: "AI 보완 초안. 회차·보완 항목은 이 아이디로 초안 조회(DRAFT-02)",
-                }),
-                status: z.enum(["GENERATING", "FAILED"]).meta({
-                    description: "GENERATING이면 보완 중(버튼을 막고 폴링), FAILED면 보완 실패(실패 안내와 다시 시도)",
-                }),
+                draftId: z
+                    .number()
+                    .int()
+                    .meta({
+                        example: 33,
+                        description: "AI 보완 초안. 회차·보완 항목은 이 아이디로 초안 조회(DRAFT-02)",
+                    }),
+                status: z
+                    .enum(["GENERATING", "FAILED"])
+                    .meta({
+                        description:
+                            "GENERATING이면 보완 중(버튼을 막고 폴링), FAILED면 보완 실패(실패 안내와 다시 시도)",
+                    }),
             })
             .nullable()
             .meta({
@@ -64,6 +85,8 @@ export const draftHistoryResponseSchema = z
 
 // 미채택 문서 목록(DRAFT-08). 초안 검토 화면의 '초안 문서 선택'에 쓴다. 검토할 초안이 있는 문서만.
 // 보여 줄 회차·보완 중인 회차는 문서를 고른 뒤 초안 이력(DRAFT-06)으로
+export const listPendingDocumentsQuerySchema = z.object(workspaceIdQueryShape);
+
 export const pendingDocumentsResponseSchema = z
     .object({
         documents: z
@@ -74,6 +97,7 @@ export const pendingDocumentsResponseSchema = z
                         .string()
                         .nullable()
                         .meta({ example: "Prisma로 ERD 옮기기", description: "생성이 끝난 최신 회차의 제목" }),
+                    requester: userRefSchema.meta({ description: "생성 요청자 (최초 생성을 요청한 회원)" }),
                     createdAt: z.date(),
                 }),
             )
@@ -106,18 +130,27 @@ export const listDocumentsQuerySchema = pageQuerySchema.extend({
         .enum(["updated", "created"])
         .default("updated")
         .meta({ description: "updated: 수정일 최신순(기본), created: 생성일 최신순" }),
+    ...workspaceIdQueryShape,
 });
 
 export const documentListItemSchema = z
     .object({
         documentId: z.number().int().meta({ example: 12 }),
-        title: z.string().nullable().meta({
-            example: "JWT 인증 흐름 정리",
-            description: "최종 문서는 항상 있음 (DB 컬럼이 NULL 허용이라 nullable)",
-        }),
+        title: z
+            .string()
+            .nullable()
+            .meta({
+                example: "JWT 인증 흐름 정리",
+                description: "최종 문서는 항상 있음 (DB 컬럼이 NULL 허용이라 nullable)",
+            }),
         summary: z.string().nullable().meta({ example: "Access·Refresh Token을 나눠 쓰는 이유와 재발급 흐름" }),
         category: categorySchema.nullable(),
         keywords: z.array(z.string()).meta({ example: ["JWT", "Refresh Token"] }),
+        requester: userRefSchema.meta({ description: "생성 요청자 (최초 생성을 요청한 회원)" }),
+        lastEditor: userRefSchema.meta({
+            description:
+                "최근 수정자 (초안 직접 수정·AI 보완 요청·최종 채택·지식 문서 수정을 마지막으로 한 회원, 없으면 null)",
+        }),
         createdAt: z.date().meta({ description: "생성일 (문서 생성을 요청한 일시)" }),
         updatedAt: z.date().meta({ description: "수정일" }),
     })
@@ -133,10 +166,13 @@ export const listDocumentsResponseSchema = z
 // 지식 문서 상세(DOC-02). 최종 채택한 문서만 (검토 중인 초안은 초안 조회 DRAFT-02)
 export const documentDetailSchema = documentListItemSchema
     .extend({
-        content: z.string().nullable().meta({
-            example: "# JWT 인증 흐름 정리\n\n## Access Token\n- 유효기간 30분 ...",
-            description: "본문 (Markdown, 최종 문서는 항상 있음)",
-        }),
+        content: z
+            .string()
+            .nullable()
+            .meta({
+                example: "# JWT 인증 흐름 정리\n\n## Access Token\n- 유효기간 30분 ...",
+                description: "본문 (Markdown, 최종 문서는 항상 있음)",
+            }),
         conversations: z
             .array(
                 z.object({
@@ -145,9 +181,11 @@ export const documentDetailSchema = documentListItemSchema
                         .string()
                         .nullable()
                         .meta({ example: "JWT 인증 흐름 정리", description: "공유 페이지 제목" }),
-                    deleted: z.boolean().meta({
-                        description: "대화가 삭제됐는지 (true면 '삭제된 원문'으로 표시하고 열람 버튼을 막음)",
-                    }),
+                    deleted: z
+                        .boolean()
+                        .meta({
+                            description: "대화가 삭제됐는지 (true면 '삭제된 원문'으로 표시하고 열람 버튼을 막음)",
+                        }),
                 }),
             )
             .meta({ description: "연결된 원문 대화 (가져온 순). '원문 열람'은 원본 대화 열람(CONV-03)" }),
@@ -202,10 +240,58 @@ export const updateDocumentResponseSchema = z
     })
     .meta({ id: "UpdateDocumentResponse" });
 
+// 휴지통 목록(TRASH-01)
+export const listTrashQuerySchema = pageQuerySchema.extend(workspaceIdQueryShape);
+
+export const trashDocumentSchema = z
+    .object({
+        documentId: z.number().int().meta({ example: 15 }),
+        title: z
+            .string()
+            .nullable()
+            .meta({
+                example: "Prisma로 ERD 옮기기",
+                description:
+                    "최종 문서는 문서 제목, 미채택 문서는 생성이 끝난 최신 회차의 제목 (생성 실패 문서는 null)",
+            }),
+        status: z
+            .enum(["DRAFT_GENERATED", "FAILED", "FINALIZED"])
+            .meta({ description: "FINALIZED면 최종 문서, 아니면 미채택 문서(검토 중·생성 실패)" }),
+        category: categorySchema.nullable().meta({ description: "지식 유형 (미채택 문서는 null)" }),
+        requester: userRefSchema.meta({ description: "생성 요청자" }),
+        deletedBy: userRefSchema.meta({ description: "휴지통으로 옮긴 회원" }),
+        deletedAt: z.date().meta({ description: "삭제 일시" }),
+        canRestore: z
+            .boolean()
+            .meta({
+                description:
+                    "내가 복원·영구 삭제할 수 있는지 (false면 버튼을 숨김). 팀 최종 문서는 소유자·관리자만, 미채택 문서는 소유자·관리자·생성 요청자",
+            }),
+    })
+    .meta({ id: "TrashDocument" });
+
+export const listTrashResponseSchema = z
+    .object({ ...pageInfoShape, documents: z.array(trashDocumentSchema).meta({ description: "삭제일 최신순" }) })
+    .meta({ id: "TrashList" });
+
+// 휴지통에서 복원(TRASH-02)
+export const restoreDocumentResponseSchema = z
+    .object({
+        documentId: z.number().int().meta({ example: 15 }),
+        status: z
+            .enum(["DRAFT_GENERATED", "FAILED", "FINALIZED"])
+            .meta({ description: "복원한 문서의 상태. FINALIZED면 지식 문서 목록, 아니면 초안 검토·대화 목록으로" }),
+    })
+    .meta({ id: "RestoreDocumentResponse" });
+
+export type ListTrashQuery = z.infer<typeof listTrashQuerySchema>;
+export type ListTrashResponse = z.infer<typeof listTrashResponseSchema>;
+export type RestoreDocumentResponse = z.infer<typeof restoreDocumentResponseSchema>;
 export type CreateDocumentBody = z.infer<typeof createDocumentBodySchema>;
 export type CreateDocumentResponse = z.infer<typeof createDocumentResponseSchema>;
 export type DocumentIdParams = z.infer<typeof documentIdParamsSchema>;
 export type DraftHistoryResponse = z.infer<typeof draftHistoryResponseSchema>;
+export type ListPendingDocumentsQuery = z.infer<typeof listPendingDocumentsQuerySchema>;
 export type PendingDocumentsResponse = z.infer<typeof pendingDocumentsResponseSchema>;
 export type ListDocumentsQuery = z.infer<typeof listDocumentsQuerySchema>;
 export type ListDocumentsResponse = z.infer<typeof listDocumentsResponseSchema>;

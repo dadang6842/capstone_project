@@ -38,3 +38,28 @@ export function toPageInfo(page: number, limit: number, totalCount: number) {
     const totalPages = Math.ceil(totalCount / limit);
     return { page, limit, totalCount, totalPages, hasNext: page < totalPages };
 }
+
+// 팀 공간 선택값. 없으면 개인 공간
+const workspaceIdMeta = { example: 3, description: "팀 워크스페이스 아이디. 생략하면 개인 워크스페이스" };
+export const workspaceIdQueryShape = {
+    workspaceId: z.coerce.number().int().positive().optional().meta(workspaceIdMeta),
+};
+
+export const workspaceIdBodyShape = {
+    workspaceId: z.number().int().positive().optional().meta(workspaceIdMeta),
+};
+
+// 등록자·생성 요청자·최근 수정자 표시용. 회원이 탈퇴로 영구 삭제됐거나 아직 없으면 null
+export const userRefSchema = z
+    .object({
+        userId: z.number().int().meta({ example: 1 }),
+        nickname: z.string().meta({ example: "로컬 사용자" }),
+    })
+    .nullable()
+    .meta({ id: "UserRef" });
+
+export type UserRef = z.infer<typeof userRefSchema>;
+
+export function toUserRef(user: { userId: bigint; nickname: string } | null): UserRef {
+    return user ? { userId: Number(user.userId), nickname: user.nickname } : null;
+}

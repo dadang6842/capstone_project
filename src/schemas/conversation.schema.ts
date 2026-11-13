@@ -1,12 +1,16 @@
 import { z } from "zod";
-import { pageInfoShape, pageQuerySchema } from "./common.schema.js";
+import {
+    pageInfoShape,
+    pageQuerySchema,
+    userRefSchema,
+    workspaceIdBodyShape,
+    workspaceIdQueryShape,
+} from "./common.schema.js";
 
-export const conversationStatusSchema = z
-    .enum(["COLLECTING", "COLLECTED", "FAILED"])
-    .meta({
-        description:
-            "수집 상태. COLLECTING이면 원본 대화 열람(CONV-03)으로 몇 초 간격 폴링, COLLECTED여야 문서 생성에 쓸 수 있음",
-    });
+export const conversationStatusSchema = z.enum(["COLLECTING", "COLLECTED", "FAILED"]).meta({
+    description:
+        "수집 상태. COLLECTING이면 원본 대화 열람(CONV-03)으로 몇 초 간격 폴링, COLLECTED여야 문서 생성에 쓸 수 있음",
+});
 
 export const collectFailReasonSchema = z
     .enum(["NOT_ACCESSIBLE", "UNSUPPORTED_CONTENT", "TIMEOUT", "COLLECT_ERROR", "DUPLICATED"])
@@ -28,6 +32,9 @@ export const conversationSchema = z
         status: conversationStatusSchema,
         collectFailReason: collectFailReasonSchema,
         messageCount: z.number().int().meta({ example: 34, description: "수집한 발화 수 (수집 전·실패면 0)" }),
+        registrant: userRefSchema.meta({
+            description: "등록자 (팀 화면의 '등록자'). 탈퇴로 영구 삭제된 회원이면 null",
+        }),
         createdAt: z.date().meta({ description: "등록 일시 (ISO 8601 UTC)" }),
     })
     .meta({ id: "Conversation" });
@@ -39,6 +46,7 @@ export const createConversationBodySchema = z
             example: "https://chatgpt.com/share/6af3fb20-85d0-83ec-84a7-783771ddb6cf",
             description: "ChatGPT 공유 링크. 링크가 들어 있는 문장을 그대로 넣어도 된다 (링크는 1개만)",
         }),
+        ...workspaceIdBodyShape,
     })
     .meta({ id: "CreateConversationRequest" });
 
@@ -50,14 +58,11 @@ export const createConversationResponseSchema = z
     .meta({ id: "CreateConversationResponse" });
 
 // 대화 목록 조회(CONV-02)
-export const listConversationsQuerySchema = pageQuerySchema;
+export const listConversationsQuerySchema = pageQuerySchema.extend(workspaceIdQueryShape);
 
-export const generationStatusSchema = z
-    .enum(["NONE", "GENERATING", "FAILED", "PENDING_REVIEW", "COMPLETED"])
-    .meta({
-        description:
-            "이 대화로 만든 문서들의 상태. 여러 개면 GENERATING > FAILED > PENDING_REVIEW > COMPLETED 순으로 하나",
-    });
+export const generationStatusSchema = z.enum(["NONE", "GENERATING", "FAILED", "PENDING_REVIEW", "COMPLETED"]).meta({
+    description: "이 대화로 만든 문서들의 상태. 여러 개면 GENERATING > FAILED > PENDING_REVIEW > COMPLETED 순으로 하나",
+});
 
 export const conversationListItemSchema = conversationSchema
     .extend({
@@ -72,15 +77,11 @@ export const conversationListItemSchema = conversationSchema
                             .nullable()
                             .meta({ description: "latestDraftId 초안의 제목 (생성 중·실패면 null)" }),
                         status: z.enum(["GENERATING", "DRAFT_GENERATED", "FAILED"]),
-                        latestDraftId: z
-                            .number()
-                            .int()
-                            .nullable()
-                            .meta({
-                                example: 31,
-                                description:
-                                    "버튼이 이동할 초안. 검토 중이면 생성이 끝난 최신 회차(A05에서 미리 선택, AI 보완 중인 회차 제외), 생성 중·실패면 가장 최근 시도(A04 진행 확인·다시 시도)",
-                            }),
+                        latestDraftId: z.number().int().nullable().meta({
+                            example: 31,
+                            description:
+                                "버튼이 이동할 초안. 검토 중이면 생성이 끝난 최신 회차(A05에서 미리 선택, AI 보완 중인 회차 제외), 생성 중·실패면 가장 최근 시도(A04 진행 확인·다시 시도)",
+                        }),
                     }),
                 )
                 .meta({ description: "미채택 문서 목록 (FINALIZED가 아닌 문서)" }),

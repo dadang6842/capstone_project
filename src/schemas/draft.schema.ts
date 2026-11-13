@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { userRefSchema } from "./common.schema.js";
 
 export const draftIdParamsSchema = z.object({
     draftId: z.coerce.number().int().positive().meta({ description: "초안 아이디" }),
@@ -29,6 +30,20 @@ export const draftDetailSchema = z
         revising: z
             .boolean()
             .meta({ description: "이 문서에 진행 중인 AI 보완 작업이 있는지 (true면 수정·보완·채택 버튼을 막음)" }),
+        requester: userRefSchema.meta({ description: "최초 생성 요청자 (문서를 처음 만든 회원)" }),
+        lastEditor: userRefSchema.meta({
+            description:
+                "최근 수정 (초안 직접 수정·AI 보완 요청·최종 채택·지식 문서 수정을 마지막으로 한 회원, 없으면 null)",
+        }),
+        draftRequester: userRefSchema.meta({
+            description: "이번 회차의 생성·보완 요청자 (첫 생성·AI 보완·다시 시도를 요청한 회원)",
+        }),
+        canEdit: z
+            .boolean()
+            .meta({
+                description:
+                    "내가 이 문서의 초안을 직접 수정·AI 보완·다시 시도·채택할 수 있는지. 개인 문서와 팀 소유자·관리자는 true, 팀 일반 구성원은 최초 생성 요청자일 때만 (false면 버튼을 숨김)",
+            }),
         conversations: z
             .array(
                 z.object({
@@ -47,10 +62,13 @@ export const draftDetailSchema = z
 // 초안 생성 재시도(DRAFT-05)
 export const retryDraftResponseSchema = z
     .object({
-        draftId: z.number().int().meta({
-            example: 33,
-            description: "재시도로 새로 만든 초안 아이디. 이 아이디로 초안 조회(DRAFT-02)를 폴링한다",
-        }),
+        draftId: z
+            .number()
+            .int()
+            .meta({
+                example: 33,
+                description: "재시도로 새로 만든 초안 아이디. 이 아이디로 초안 조회(DRAFT-02)를 폴링한다",
+            }),
         status: z.literal("GENERATING"),
     })
     .meta({ id: "RetryDraftResponse" });
