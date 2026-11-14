@@ -6,6 +6,8 @@ import json
 import os
 import re
 import tempfile
+import heapq
+from time import perf_counter
 from collections import Counter
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
@@ -78,94 +80,216 @@ EXTRACT_JS = r"""() => {
 }"""
 
 
-async def collect_shared_conversation(url, max_rounds=40):
-    if not isinstance(max_rounds, int) or isinstance(max_rounds, bool) or not 5 <= max_rounds <= 120:
-        raise ValueError('max_rounds는 5~120 사이의 정수여야 합니다.')
-    url = resolve_share_input(url)
+SCROLL_JS = r'''(action) => {
+    const selector = '[data-message-role], [data-message-author-role]';
+    const nodes = Array.from(document.querySelectorAll(selector));
+    const scrollers = new Set();
+    const root = document.scrollingElement;
+    if (root && root.scrollHeight > root.clientHeight + 2) scrollers.add(root);
+    for (const node of nodes) {
+        for (let p = node.parentElement; p; p = p.parentElement) {
+            const overflow = getComputedStyle(p).overflowY;
+            if (/(auto|scroll)/.test(overflow) && p.scrollHeight > p.clientHeight + 2)
+                scrollers.add(p);
+        }
+    }
+    // A fitting page may have no scrollable element.
+    if (!scrollers.size && root) scrollers.add(root);
+    const before = Array.from(scrollers, p => ({
+        top:p.scrollTop, height:p.scrollHeight, viewport:p.clientHeight
+    }));
+    if (action === 'top' || action === 'step') {
+        for (const p of scrollers) {
+            const dest = action === 'top' ? 0 :
+                Math.min(p.scrollHeight-p.clientHeight, p.scrollTop+Math.max(1,p.clientHeight*0.60));
+            p.scrollTo({top:dest, behavior:'instant'});
+        }
+    }
+    const after = Array.from(scrollers, p => ({
+        top:p.scrollTop, height:p.scrollHeight, viewport:p.clientHeight
+    }));
+    return {
+        positions:after,
+        at_bottom:after.length > 0 && after.every(p => p.top+p.viewport >= p.height-4),
+        moved:after.some((p,i) => Math.abs(p.top-before[i].top)>1),
+        loading:!!document.querySelector('[aria-busy="true"], [role="progressbar"]')
+    };
+}'''
+
+class MessageAccumulator:
+    """Keep nonempty bodies and ordering constraints across rendered snapshots."""
+    def __init__(self):
+        self.messages = {}
+        self.edges = set()
+
+    def add(self, messages):
+        ids = []
+        for message in messages:
+            key = message.get('source_message_id')
+            if not isinstance(key, str) or not key.strip():
+                raise ValueError('메시지 ID가 없어 누락·중복 검사를 할 수 없습니다.')
+            old = self.messages.get(key)
+            if old and old['role'] != message['role']:
+                raise ValueError('같은 메시지 ID의 발화자가 바뀌었습니다.')
+            if key not in ids:
+                ids.append(key)
+            # Do not replace a populated body with a later unloaded placeholder.
+            score = lambda m: (len(m.get('content', '').strip()), len(m.get('code_blocks', [])))
+            if old is None or score(message) >= score(old):
+                self.messages[key] = dict(message)
+        self.edges.update((a,b) for a,b in zip(ids,ids[1:]) if a != b)
+
+    def ordered(self):
+        rank = {key:i for i,key in enumerate(self.messages)}
+        degrees = dict.fromkeys(rank,0)
+        children = {key:set() for key in rank}
+        for a,b in self.edges:
+            if b not in children[a]:
+                children[a].add(b);degrees[b]+=1
+        ready = [(rank[k],k) for k,v in degrees.items() if v == 0]
+        heapq.heapify(ready)
+        result = []
+        while ready:
+            _,key = heapq.heappop(ready)
+            result.append(dict(self.messages[key]))
+            for nxt in children[key]:
+                degrees[nxt]-=1
+                if degrees[nxt] == 0:heapq.heappush(ready,(rank[nxt],nxt))
+        if len(result) != len(rank):
+            raise ValueError('화면에서 관찰한 메시지 순서가 충돌합니다.')
+        for i,message in enumerate(result,1):
+            message['sequence'] = i
+            message.pop('body_found',None)
+        return result
+
+DEFAULT_MAX_ROUNDS = 1200
+DEFAULT_TIMEOUT_SECONDS = 210.0
+
+
+class CollectionIncompleteError(RuntimeError):
+    """수집 한도 도달. diagnostics는 진단용이며 저장 가능한 대화 원문이 아니다."""
+    def __init__(self, message, diagnostics):
+        self.diagnostics = diagnostics
+        super().__init__(message)
+
+
+async def collect_shared_conversation(
+    url, max_rounds=DEFAULT_MAX_ROUNDS, *, timeout_seconds=DEFAULT_TIMEOUT_SECONDS
+):
+    """기존 호출 형식을 유지한다. 실패·부분 결과는 record로 반환하지 않는다.
+
+    timeout_seconds는 페이지 접근·스크롤을 포함한 전체 수집의 제한이다.
+    취소 시 브라우저 정리 시간이 추가될 수 있다. 확장 프로그램 파일은 요구하지 않는다.
+    """
+    if type(max_rounds) is not int or not 5 <= max_rounds <= 5000:
+        raise ValueError('max_rounds는 5~5000 사이의 정수여야 합니다.')
+    if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds,(int,float)) or not 0 < timeout_seconds <= 3600:
+        raise ValueError('timeout_seconds는 0보다 크고 3600 이하인 유한한 숫자여야 합니다.')
+    url=validate_share_url(resolve_share_input(url))
     try:
         from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
     except ImportError as exc:
         raise RuntimeError('먼저 requirements.txt와 Playwright Chromium을 설치해 주세요.') from exc
-    url = validate_share_url(url)
-    collected = {}
-    stable = 0
-    previous = None
-    stopped_stable = False
-    async with async_playwright() as pw:
-        browser = await pw.chromium.launch(headless=True, args=['--no-sandbox'])
-        try:
-            page = await browser.new_page(viewport={'width': 1280, 'height': 900})
-            response = await page.goto(url, wait_until='domcontentloaded', timeout=60000)
-            if response and response.status >= 400:
-                raise RuntimeError(f'공유 페이지 접근 실패: HTTP {response.status}. 차단을 우회하지 않습니다.')
-            validate_share_url(page.url)
+
+    accumulator=MessageAccumulator()
+    trace=[]
+    previous=None
+    stable_at_bottom=0
+    started=perf_counter()
+
+    def diagnostics(reason, mode=None):
+        return {
+            'stop_reason':reason,
+            'message_count':len(accumulator.messages),
+            'role_counts':dict(Counter(m['role'] for m in accumulator.messages.values())),
+            'collection_rounds':len(trace),
+            'extraction_selector':mode,
+            'stopped_after_stable_content':reason=='bottom_stable',
+            'elapsed_seconds':round(perf_counter()-started,2),
+            'timeout_seconds':float(timeout_seconds),
+            # Operational diagnostics omit message text and retain only recent progress.
+            'collection_trace_tail':trace[-12:],
+        }
+
+    async def collect():
+        nonlocal previous, stable_at_bottom
+        async with async_playwright() as pw:
+            browser=await pw.chromium.launch(headless=True,args=['--no-sandbox'])
             try:
-                await page.locator('[data-message-role], [data-message-author-role]').first.wait_for(
-                    state='attached', timeout=45000)
-            except PlaywrightTimeout as exc:
-                visible = (await page.locator('body').inner_text())[:800]
-                raise RuntimeError('발화 요소를 찾지 못했습니다. 로그인·접근 제한 또는 페이지 구조를 확인해 주세요.\n'
-                                   + visible) from exc
-
-            # 위쪽부터 읽으며 수집한 메시지를 누적합니다.
-            await page.keyboard.press('Control+Home')
-            for round_no in range(max_rounds):
-                snapshot = await page.evaluate(EXTRACT_JS)
-                visible_messages = snapshot['messages']
-                if any(not m['source_message_id'] for m in visible_messages):
-                    raise RuntimeError('메시지 식별자가 없는 화면 구조입니다. 순서·중복 검증 전에 저장하지 않습니다.')
-                for message in visible_messages:
-                    key = message['source_message_id']
-                    if key in collected and collected[key]['role'] != message['role']:
-                        raise RuntimeError('같은 메시지 ID의 발화자가 달라 수집을 중단했습니다.')
-                    if key not in collected or message['content'].strip():
-                        collected[key] = message
-                signature = tuple((k, m['content']) for k, m in collected.items())
-                stable = stable + 1 if signature == previous else 0
-                previous = signature
-                if stable >= 4:
-                    stopped_stable = True
-                    break
-                # 공유 화면의 스크롤 컨테이너가 달라도 현재 마지막 발화를 기준으로 진행합니다.
-                await page.locator('[data-message-role], [data-message-author-role]').last.scroll_into_view_if_needed()
-                await page.keyboard.press('Control+End')
+                page=await browser.new_page(viewport={'width':1280,'height':900})
+                response=await page.goto(url,wait_until='domcontentloaded',timeout=60000)
+                if response and response.status >= 400:
+                    raise RuntimeError(f'공유 페이지 접근 실패: HTTP {response.status}. 차단을 우회하지 않습니다.')
+                validate_share_url(page.url)
+                try:
+                    await page.locator('[data-message-role], [data-message-author-role]').first.wait_for(
+                        state='attached',timeout=45000)
+                except PlaywrightTimeout as exc:
+                    raise RuntimeError('발화 요소를 찾지 못했습니다. 로그인·접근 제한 또는 페이지 구조를 확인하세요.') from exc
+                await page.evaluate(SCROLL_JS,'top')
                 await asyncio.sleep(1)
+                for round_no in range(max_rounds):
+                    snapshot=await page.evaluate(EXTRACT_JS)
+                    accumulator.add(snapshot['messages'])
+                    position=await page.evaluate(SCROLL_JS,'inspect')
+                    signature=(
+                        tuple((key,m['content'],tuple(m['code_blocks'])) for key,m in accumulator.messages.items()),
+                        tuple((p['top'],p['height'],p['viewport']) for p in position['positions'])
+                    )
+                    if position['at_bottom'] and not position['loading'] and signature==previous:
+                        stable_at_bottom+=1
+                    else:
+                        stable_at_bottom=0
+                    previous=signature
+                    trace.append({'round':round_no+1,'observed':len(snapshot['messages']),
+                        'collected':len(accumulator.messages),'at_bottom':position['at_bottom'],
+                        'loading':position['loading'],'positions':position['positions'],
+                        'stable_at_bottom':stable_at_bottom})
+                    if stable_at_bottom >= 6:
+                        break
+                    await page.evaluate(SCROLL_JS,'step')
+                    await asyncio.sleep(1 if position['at_bottom'] else 0.45)
+                else:
+                    raise CollectionIncompleteError(
+                        '수집 반복 한도에 도달했습니다. 부분 수집 결과는 저장하지 않습니다.',
+                        diagnostics('round_limit',snapshot['mode']))
 
-            messages = list(collected.values())
-            if not messages:
-                raise RuntimeError('수집한 발화가 없어 저장하지 않습니다.')
-            missing = [m['source_message_id'] for m in messages if not m['body_found'] or not m['content'].strip()]
-            if missing:
-                raise RuntimeError('본문이 비어 있는 발화가 있습니다. 이미지 전용 발화인지 확인이 필요합니다: '
-                                   + ', '.join(missing))
-            for i, message in enumerate(messages, 1):
-                message['sequence'] = i
-                message.pop('body_found', None)
-            return {
-                'schema_version': 'shared_text_v1',
-                'source_url': url,
-                'captured_at': datetime.now(timezone.utc).isoformat(),
-                'capture_method': 'playwright_rendered_text',
-                'extractor_version': '1.1',
-                'completeness': 'unverified',
-                'conversation': {'title': await page.title(), 'messages': messages},
-                'diagnostics': {
-                    'message_count': len(messages),
-                    'removed_ui_sections': sum(m.get('removed_ui_sections', 0) for m in messages),
-                    'role_counts': dict(Counter(m['role'] for m in messages)),
-                    'extraction_selector': snapshot['mode'],
-                    'collection_rounds': round_no + 1,
-                    'stopped_after_stable_content': stopped_stable,
-                    'warnings': (["수집 회수 한도에 도달했습니다. 내용 안정화가 확인되지 않았습니다."] if not stopped_stable else []) + [
+                messages=accumulator.ordered()
+                if not messages:raise RuntimeError('수집한 발화가 없어 저장하지 않습니다.')
+                missing=[m['source_message_id'] for m in messages if not m['content'].strip()]
+                if missing:
+                    raise RuntimeError('본문이 비어 있는 발화가 있어 저장하지 않습니다. 이미지 전용 발화인지 확인하세요: '+', '.join(missing))
+                result_diagnostics=diagnostics('bottom_stable',snapshot['mode'])
+                result_diagnostics.update({
+                    'removed_ui_sections':sum(m.get('removed_ui_sections',0) for m in messages),
+                    'warnings':[
                         '공유 페이지에 표시된 텍스트이며 원본 JSON과의 일치는 미검증입니다.',
                         '이미지 원본은 수집하지 않습니다. 수식·표·Markdown 형식은 보장하지 않습니다.',
                         '코드 블록에 화면의 언어명 등 표시 요소가 포함될 수 있어 비교가 필요합니다.',
-                        '수집 개수의 안정화는 전체 발화의 누락 없음을 보장하지 않습니다.'
+                        '하단 내용의 안정화는 전체 발화의 누락 없음을 보장하지 않습니다.',
                     ]
+                })
+                return {
+                    'schema_version':'shared_text_v1',
+                    'source_url':url,
+                    'captured_at':datetime.now(timezone.utc).isoformat(),
+                    'capture_method':'playwright_rendered_text',
+                    'extractor_version':'2.0',
+                    'completeness':'unverified',
+                    'conversation':{'title':await page.title(),'messages':messages},
+                    'diagnostics':result_diagnostics,
                 }
-            }
-        finally:
-            await browser.close()
+            finally:
+                await browser.close()
+    try:
+        return await asyncio.wait_for(collect(),timeout=float(timeout_seconds))
+    except asyncio.TimeoutError as exc:
+        raise CollectionIncompleteError(
+            f'수집 제한 시간({timeout_seconds}초)을 초과했습니다. 부분 결과는 저장하지 않습니다.',
+            diagnostics('time_limit')) from exc
+    except PlaywrightTimeout as exc:
+        raise RuntimeError('공유 페이지 접근 또는 렌더링 대기 시간이 초과됐습니다.') from exc
+
 
 
 def save_shared_capture(record, directory):
@@ -195,13 +319,16 @@ def save_shared_capture(record, directory):
 
 
 
-async def import_shared_conversation(url: str, *, max_rounds: int = 40) -> dict:
+async def import_shared_conversation(
+    url: str, *, max_rounds: int = DEFAULT_MAX_ROUNDS,
+    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+) -> dict:
     """공유 페이지 텍스트를 반환한다. DB·파일 저장 및 Luna 호출은 하지 않는다.
 
     conversation_id는 공유 URL의 ID로 고정되며 원래 비공개 채팅 ID가 아니다.
     capture_id는 수집 내용의 해시다. 내용이 바뀌면 달라진다.
     """
-    record = await collect_shared_conversation(url, max_rounds=max_rounds)
+    record = await collect_shared_conversation(url, max_rounds=max_rounds, timeout_seconds=timeout_seconds)
     record['conversation_id'] = 'chatgpt_share_' + urlsplit(record['source_url']).path.rstrip('/').split('/')[-1]
     stable_payload = {'source_url': record['source_url'], 'conversation': record['conversation']}
     canonical = json.dumps(stable_payload, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
@@ -223,9 +350,12 @@ def main():
     parser = argparse.ArgumentParser(description='사용자가 제공한 ChatGPT 공유 링크의 텍스트 수집')
     parser.add_argument('url')
     parser.add_argument('--output-dir', type=Path, default=Path('./shared_imports'))
+    parser.add_argument('--max-rounds', type=int, default=DEFAULT_MAX_ROUNDS)
+    parser.add_argument('--timeout-seconds', type=float, default=DEFAULT_TIMEOUT_SECONDS)
     args = parser.parse_args()
     try:
-        record = asyncio.run(import_shared_conversation(args.url))
+        record = asyncio.run(import_shared_conversation(
+            args.url, max_rounds=args.max_rounds, timeout_seconds=args.timeout_seconds))
         path, status = save_shared_capture(record, args.output_dir)
     except (ValueError, RuntimeError) as exc:
         parser.exit(1, f'수집 실패: {exc}\n')
