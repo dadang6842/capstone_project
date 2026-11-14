@@ -32,6 +32,8 @@ def classify(exc):
         return 'INVALID_URL'
     if type(exc).__name__ == 'TimeoutError':  # playwright TimeoutError (페이지 로딩 60초 초과 등)
         return 'TIMEOUT'
+    if type(exc).__name__ == 'CollectionIncompleteError':
+       return 'TIMEOUT'
     if isinstance(exc, RuntimeError):
         for prefix, code in RUNTIME_ERROR_CODES:
             if str(exc).startswith(prefix):

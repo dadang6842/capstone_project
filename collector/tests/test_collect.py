@@ -34,11 +34,13 @@ class CollectEntryTests(unittest.TestCase):
 
     def test_failure_codes(self):
         PlaywrightTimeout = type('TimeoutError', (Exception,), {})
+        CollectionIncomplete = type('CollectionIncompleteError', (RuntimeError,), {})
         cases = [
             (RuntimeError('공유 페이지 접근 실패: HTTP 404. 차단을 우회하지 않습니다.'), 'NOT_ACCESSIBLE'),
             (RuntimeError('발화 요소를 찾지 못했습니다. 로그인·접근 제한...'), 'NOT_ACCESSIBLE'),
             (RuntimeError('본문이 비어 있는 발화가 있습니다. ...: m3'), 'UNSUPPORTED_CONTENT'),
             (PlaywrightTimeout('Timeout 60000ms exceeded'), 'TIMEOUT'),
+            (CollectionIncomplete('수집 시간 한도(210초)에 도달했습니다.'), 'TIMEOUT'),
             (ValueError('https://chatgpt.com/share/공유ID 형태의 링크를 입력해 주세요.'), 'INVALID_URL'),
             (RuntimeError('먼저 requirements.txt와 Playwright Chromium을 설치해 주세요.'), 'COLLECT_ERROR'),
         ]
