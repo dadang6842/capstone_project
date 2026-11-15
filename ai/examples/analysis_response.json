@@ -1,0 +1,127 @@
+{
+  "documentId": 15,
+  "runId": "bfaa0c900517cd116b271a2cefe811057617a5e5345a35222a23c47fd2092caa",
+  "status": "drafts_stored",
+  "artifactIds": [
+    "0550f8c1-3ed4-5018-8c3f-0a76087bb769"
+  ],
+  "noDocumentReason": null,
+  "uncertainties": [],
+  "reviewStatus": "completed",
+  "reviewError": null,
+  "automaticRevision": false,
+  "automaticAdoption": false,
+  "documents": [
+    {
+      "artifactId": "0550f8c1-3ed4-5018-8c3f-0a76087bb769",
+      "version": 1,
+      "status": "draft",
+      "title": "함수 사용 방법",
+      "category": "MANUAL",
+      "summary": "대화에서 제안한 방법이다.",
+      "keywords": [
+        "Python"
+      ],
+      "content": "함수를 호출한다. 실행 결과는 사용자 보고다.\n\n### 원문 함수\n\n제안된 코드다.\n\n```\ndef answer():\n    return 42\n\n```",
+      "contentHash": "83055c0a25a0b08c922bd72c4431b7a0ed17b3c70644c98f94a5e9670cc7d62a",
+      "sourceHash": "439b46bf75e0f3d60ffb6194c8d250e86bf4ba0f8f80e46e974255c80cb4b815",
+      "createdAt": "2026-11-13T19:40:05.033033+00:00",
+      "updatedAt": "2026-11-13T19:40:05.036555+00:00",
+      "metadata": {
+        "mainTopics": [
+          {
+            "value": "함수 사용",
+            "origin": "model_normalized",
+            "sourceIds": [
+              "S002"
+            ],
+            "sources": [
+              {
+                "sourceRef": "S002",
+                "kind": "conversation_message",
+                "conversationId": 7,
+                "sourceId": "example-assistant-1",
+                "sequence": 2,
+                "role": "ASSISTANT"
+              }
+            ]
+          }
+        ],
+        "mentionedTopics": [],
+        "classificationCandidates": [],
+        "entitiesAndAliases": [],
+        "scope": {
+          "value": "함수 사용",
+          "origin": "model_normalized",
+          "sourceIds": [
+            "S002"
+          ],
+          "sources": [
+            {
+              "sourceRef": "S002",
+              "kind": "conversation_message",
+              "conversationId": 7,
+              "sourceId": "example-assistant-1",
+              "sequence": 2,
+              "role": "ASSISTANT"
+            }
+          ]
+        },
+        "documentType": "procedure",
+        "conditions": [],
+        "contentStates": []
+      },
+      "metadataStatus": "current",
+      "contentOrigin": "ai_generated",
+      "sourceLinksStatus": "generated_links",
+      "sourceLinks": [
+        {
+          "sourceRef": "S002",
+          "kind": "conversation_message",
+          "conversationId": 7,
+          "sourceId": "example-assistant-1",
+          "sequence": 2,
+          "role": "ASSISTANT"
+        }
+      ],
+      "copiedCodeBlocks": [
+        {
+          "codeRef": "C001",
+          "code": "def answer():\n    return 42\n",
+          "sha256": "aecc013c518523ca22b7e3780f87002f5cae13fabc369f2f59a1faf7058f8c76",
+          "label": "원문 함수",
+          "notes": "제안된 코드다.",
+          "sources": [
+            {
+              "sourceRef": "S002",
+              "kind": "conversation_message",
+              "conversationId": 7,
+              "sourceId": "example-assistant-1",
+              "sequence": 2,
+              "role": "ASSISTANT"
+            }
+          ]
+        }
+      ],
+      "uncertainties": [],
+      "sourceWarnings": [
+        "원문 수집 완전성과 외부 사실은 이 모듈에서 검증하지 않습니다.",
+        "첨부 메타데이터는 첨부 원본 본문이 아닙니다. 없는 내용을 추정하지 마세요."
+      ],
+      "relationsStatus": "not_processed",
+      "eligibleForIndexing": false,
+      "review": {
+        "status": "no_issues_detected",
+        "label": "자동 검토에서 지적된 사항 없음",
+        "findings": [],
+        "optionalNotes": [],
+        "contentHash": "83055c0a25a0b08c922bd72c4431b7a0ed17b3c70644c98f94a5e9670cc7d62a",
+        "externalTruth": "not_checked",
+        "meaning": "model_review_only",
+        "automaticRevisionPerformed": false,
+        "reviewScope": "generated_documents_once_not_coverage_check"
+      },
+      "lastUserAction": null
+    }
+  ]
+}
