@@ -2,7 +2,7 @@
 
 사용: python collect.py <공유 URL>
 결과는 stdout에 JSON 한 줄로만 쓴다 (Playwright 로그 등은 stderr).
-  성공: {"ok": true, "captureId": "share_...", "title": "...", "messages": [{"sourceMessageId", "role", "content"}]}
+  성공: {"ok": true, "captureId": "share_...", "title": "...", "messages": [{"sourceMessageId", "role", "content", "codeBlocks"}]}
   실패: {"ok": false, "code": "NOT_ACCESSIBLE|UNSUPPORTED_CONTENT|TIMEOUT|COLLECT_ERROR|INVALID_URL", "message": "..."}
 종료 코드: 성공 0, 실패 1.
 수집 모듈(shared_importer.py, share_input.py)은 고치지 않고 그대로 쓴다.
@@ -32,8 +32,9 @@ def classify(exc):
         return 'INVALID_URL'
     if type(exc).__name__ == 'TimeoutError':  # playwright TimeoutError (페이지 로딩 60초 초과 등)
         return 'TIMEOUT'
+    # extractor 2.0: 전체 수집 제한(기본 210초)·스크롤 반복 한도에 걸림. 부분 수집본은 저장하지 않는다
     if type(exc).__name__ == 'CollectionIncompleteError':
-       return 'TIMEOUT'
+        return 'TIMEOUT'
     if isinstance(exc, RuntimeError):
         for prefix, code in RUNTIME_ERROR_CODES:
             if str(exc).startswith(prefix):
@@ -53,9 +54,16 @@ def to_output(record):
         'ok': True,
         'captureId': record['capture_id'],  # 링크+대화 내용 해시. 내용이 추가되면 달라진다
         'title': clean_title(record['conversation']['title']),
-        # 추천 질문을 뺀 content만 쓴다 (content_raw·code_blocks는 저장하지 않음, code는 content에 포함돼 있음)
+        # 추천 질문을 뺀 content만 쓴다 (content_raw는 저장하지 않음)
+        # codeBlocks: 수집 모듈이 뽑은 발화별 코드 블록. 코드는 content에도 들어 있지만, AI 서버가 코드 경계를 알 수 있게 따로 넘긴다
+        # (빈 문자열은 빼고, 코드가 없으면 빈 배열)
         'messages': [
-            {'sourceMessageId': m['source_message_id'], 'role': m['role'].upper(), 'content': m['content']}
+            {
+                'sourceMessageId': m['source_message_id'],
+                'role': m['role'].upper(),
+                'content': m['content'],
+                'codeBlocks': [c for c in m.get('code_blocks') or [] if c.strip()],
+            }
             for m in record['conversation']['messages']
         ],
     }

@@ -4,7 +4,7 @@ import { z } from "zod";
 import { env } from "../config/env.js";
 
 // 공유 대화 수집 모듈(collector/collect.py, Python + Playwright)을 자식 프로세스로 실행한다.
-// collect.py는 stdout에 JSON 한 줄만 쓴다. 성공이면 제목·발화 목록, 실패면 원인 코드.
+// collect.py는 stdout에 JSON 한 줄만 쓴다. 성공이면 제목·발화 목록(+ 발화별 코드 블록), 실패면 원인 코드.
 // Chromium을 띄우는 무거운 작업이라 동시에 COLLECTOR_CONCURRENCY개까지만 돌리고 나머지는 차례를 기다린다.
 
 const COLLECTOR_DIR = path.resolve("collector"); // 서버는 프로젝트 루트(/app)에서 실행한다
@@ -24,6 +24,8 @@ const collectedSchema = z.object({
         sourceMessageId: z.string().min(1).max(100),
         role: z.enum(["USER", "ASSISTANT"]),
         content: z.string().min(1),
+        // 발화별 코드 블록 (AI-01 codeBlocks로 보냄). 이전 collect.py처럼 필드가 없으면 빈 배열
+        codeBlocks: z.array(z.string()).default([]),
       }),
     )
     .min(1),
