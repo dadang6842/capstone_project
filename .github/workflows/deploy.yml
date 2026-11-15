@@ -12,9 +12,9 @@ jobs:
     build:
         runs-on: ubuntu-latest
         steps:
-            - uses: actions/checkout@v4
+            - uses: actions/checkout@v6
 
-            - uses: actions/setup-node@v4
+            - uses: actions/setup-node@v6
               with:
                   node-version: 22
                   cache: npm
@@ -25,7 +25,8 @@ jobs:
                   DATABASE_URL: mysql://build:build@localhost:3306/build
 
             - run: npm run build
-            # 공유 대화 수집 모듈 단위 테스트 (브라우저·네트워크 없이 URL 검사·출력 형식만 확인)
+
+            # 공유 대화 수집 모듈 단위 테스트 (가짜 브라우저로 확인. playwright 패키지는 필요하지만 브라우저 설치는 안 함)
             - uses: actions/setup-python@v6
               with:
                   python-version: "3.11"
@@ -36,6 +37,14 @@ jobs:
             - run: python -m unittest discover -s tests -v
               working-directory: collector
 
+            # AI 서버 단위 테스트 (모의 모델 응답, 실제 모델 호출·비용 없음)
+            - run: pip install -r requirements-test.txt
+              working-directory: ai
+            - run: python -m unittest discover -s . -v
+              working-directory: ai/tests
+              env:
+                  PYTHONPATH: ..
+
     # main에 push될 때만: 이미지 빌드 → Docker Hub에 올림 → EC2에서 받아서 실행
     deploy:
         needs: build
@@ -43,17 +52,18 @@ jobs:
         runs-on: ubuntu-latest
         env:
             IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/capstone
+            AI_IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/capstone-ai
         steps:
-            - uses: actions/checkout@v4
+            - uses: actions/checkout@v6
 
-            - uses: docker/setup-buildx-action@v3
+            - uses: docker/setup-buildx-action@v4
 
-            - uses: docker/login-action@v3
+            - uses: docker/login-action@v4
               with:
                   username: ${{ secrets.DOCKERHUB_USERNAME }}
                   password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-            - uses: docker/build-push-action@v6
+            - uses: docker/build-push-action@v7
               with:
                   context: .
                   push: true
@@ -63,6 +73,18 @@ jobs:
                       ${{ env.IMAGE }}:${{ github.sha }}
                   cache-from: type=gha
                   cache-to: type=gha,mode=max
+
+            # AI 서버 이미지 (ai/ 폴더만 빌드 컨텍스트로)
+            - uses: docker/build-push-action@v7
+              with:
+                  context: ./ai
+                  push: true
+                  platforms: linux/amd64
+                  tags: |
+                      ${{ env.AI_IMAGE }}:latest
+                      ${{ env.AI_IMAGE }}:${{ github.sha }}
+                  cache-from: type=gha,scope=ai
+                  cache-to: type=gha,mode=max,scope=ai
 
             - name: compose 파일을 EC2로 복사
               uses: appleboy/scp-action@v1
@@ -79,15 +101,23 @@ jobs:
                   host: ${{ secrets.EC2_HOST }}
                   username: ${{ secrets.EC2_USER }}
                   key: ${{ secrets.EC2_SSH_KEY }}
-                  envs: IMAGE
+                  envs: IMAGE,AI_IMAGE
                   script: |
                       set -e
                       cd ~/app
+                      # AI 서버 환경변수 파일은 EC2에서 직접 만든다 (OpenAI 키 등 비밀값이라 저장소에 두지 않음)
+                      if [ ! -f ai.env ]; then
+                        echo "~/app/ai.env가 없습니다. ai/.env.example을 보고 만든 뒤 다시 배포해 주세요."; exit 1
+                      fi
                       # 로그 폴더 (컨테이너의 node 사용자가 쓸 수 있게 uid 1000 소유로)
                       sudo mkdir -p /var/log/backend
                       sudo chown 1000:1000 /var/log/backend
+                      # AI 서버 데이터 폴더 (컨테이너의 ai 사용자 = uid 1000)
+                      sudo mkdir -p /var/lib/capstone-ai
+                      sudo chown 1000:1000 /var/lib/capstone-ai
                       export IMAGE="$IMAGE:${{ github.sha }}"
-                      echo "IMAGE=$IMAGE" > .image.env
+                      export AI_IMAGE="$AI_IMAGE:${{ github.sha }}"
+                      printf 'IMAGE=%s\nAI_IMAGE=%s\n' "$IMAGE" "$AI_IMAGE" > .image.env
                       docker compose -f docker-compose.prod.yml --env-file .image.env pull
                       docker compose -f docker-compose.prod.yml --env-file .image.env up -d
                       docker image prune -af
@@ -95,8 +125,17 @@ jobs:
                       # 서버가 뜰 때까지 최대 60초 헬스체크
                       for i in $(seq 1 30); do
                         if curl -fs http://localhost:3000/api/v1/health > /dev/null; then
+                          echo "백엔드 정상"; break
+                        fi
+                        if [ "$i" = 30 ]; then echo "헬스체크 실패"; docker logs --tail 50 capstone; exit 1; fi
+                        sleep 2
+                      done
+
+                      # AI 서버도 확인 (포트를 밖으로 안 열어서 백엔드 컨테이너 안에서 부른다)
+                      for i in $(seq 1 15); do
+                        if docker exec capstone node -e "fetch('http://ai:8000/health').then(r=>r.json()).then(j=>process.exit(j.v2Enabled?0:2)).catch(()=>process.exit(1))"; then
                           echo "배포 성공"; exit 0
                         fi
                         sleep 2
                       done
-                      echo "헬스체크 실패"; docker logs --tail 50 capstone; exit 1
+                      echo "AI 서버 헬스체크 실패 (v2Enabled가 false면 ai.env의 AI_ENABLE_V2_ANALYSES=true 확인)"; docker logs --tail 50 capstone-ai; exit 1

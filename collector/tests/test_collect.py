@@ -10,7 +10,8 @@ import collect
 URL = 'https://chatgpt.com/share/6af3fb20-85d0-83ec-84a7-783771ddb6cf'
 RECORD = {'capture_id': 'share_abc', 'conversation': {'title': 'ChatGPT - JWT 정리', 'messages': [
     {'source_message_id': 'm1', 'role': 'user', 'content': '질문', 'code_blocks': []},
-    {'source_message_id': 'm2', 'role': 'assistant', 'content': '답변', 'content_raw': '답변 + 추천 질문'}]}}
+    {'source_message_id': 'm2', 'role': 'assistant', 'content': '답변\nconst a = 1;', 'content_raw': '답변 + 추천 질문',
+     'code_blocks': ['const a = 1;', '  ']}]}}
 
 
 def run(record=None, error=None):
@@ -29,8 +30,16 @@ class CollectEntryTests(unittest.TestCase):
         code, payload = run(record=RECORD)
         self.assertEqual(code, 0)
         self.assertEqual(payload, {'ok': True, 'captureId': 'share_abc', 'title': 'JWT 정리', 'messages': [
-            {'sourceMessageId': 'm1', 'role': 'USER', 'content': '질문'},
-            {'sourceMessageId': 'm2', 'role': 'ASSISTANT', 'content': '답변'}]})
+            {'sourceMessageId': 'm1', 'role': 'USER', 'content': '질문', 'codeBlocks': []},
+            {'sourceMessageId': 'm2', 'role': 'ASSISTANT', 'content': '답변\nconst a = 1;', 'codeBlocks': ['const a = 1;']}]})
+
+    def test_code_blocks_missing_or_blank(self):
+        # code_blocks가 없거나 공백뿐인 코드만 있으면 빈 배열
+        record = {'capture_id': 'share_abc', 'conversation': {'title': 't', 'messages': [
+            {'source_message_id': 'm1', 'role': 'user', 'content': '질문'},
+            {'source_message_id': 'm2', 'role': 'assistant', 'content': '답변', 'code_blocks': ['', '\n']}]}}
+        _, payload = run(record=record)
+        self.assertEqual([m['codeBlocks'] for m in payload['messages']], [[], []])
 
     def test_failure_codes(self):
         PlaywrightTimeout = type('TimeoutError', (Exception,), {})

@@ -10,3 +10,4 @@ docker-compose*.yml
 logs
 collector/.venv
 **/__pycache__
+ai

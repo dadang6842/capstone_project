@@ -5,6 +5,11 @@ services:
         container_name: capstone
         restart: always
         env_file: .env
+        # AI 서버는 같은 compose 네트워크의 ai 컨테이너 (.env의 AI_SERVER_URL보다 이 값이 우선)
+        environment:
+            AI_SERVER_URL: http://ai:8000
+        depends_on:
+            - ai
         # Node가 PID 1이면 끝난 Chromium 자식 프로세스(좀비)를 정리하지 못해서 tini를 init으로 둔다
         init: true
         # Chromium은 /dev/shm을 많이 쓴다 (Docker 기본 64MB면 긴 대화에서 탭이 죽음)
@@ -16,6 +21,25 @@ services:
         # 127.0.0.1로 묶어서 외부에서 3000번으로 직접 들어오는 건 막음
         ports:
             - "127.0.0.1:3000:3000"
+        logging:
+            driver: json-file
+            options:
+                max-size: "10m"
+                max-file: "3"
+
+    # AI 서버 (ai/ 폴더, FastAPI). 포트를 밖으로 열지 않고 app 컨테이너만 http://ai:8000 으로 부른다
+    ai:
+        image: ${AI_IMAGE}
+        container_name: capstone-ai
+        restart: always
+        # OPENAI_API_KEY·INTERNAL_API_KEY(백엔드 .env와 같은 값)·AI_MODEL·AI_ENABLE_V2_ANALYSES=true
+        # 백엔드 .env와 나눠서 DB·JWT 비밀값이 AI 컨테이너에 들어가지 않게 한다
+        env_file: ai.env
+        environment:
+            AI_DATA_DIR: /data
+        # 모델 호출 기록·결과·시험용 SQLite (컨테이너 안 ai 사용자 = uid 1000). 재배포해도 남아서 같은 요청은 결과를 다시 씀
+        volumes:
+            - /var/lib/capstone-ai:/data
         logging:
             driver: json-file
             options:

@@ -1,0 +1,29 @@
+{
+  "documentId": 15,
+  "conversations": [
+    {
+      "conversationId": 7,
+      "title": "함수 사용 예시",
+      "messages": [
+        {
+          "sourceId": "example-user-1",
+          "role": "USER",
+          "text": "함수 사용 방법은?"
+        },
+        {
+          "sourceId": "example-assistant-1",
+          "role": "ASSISTANT",
+          "text": "대화에서 제안한 예시 코드다.\n```python\ndef answer():\n    return 42\n```\n",
+          "codeBlocks": [
+            "def answer():\n    return 42\n"
+          ]
+        },
+        {
+          "sourceId": "example-user-result",
+          "role": "USER",
+          "text": "실행해서 42가 나왔어."
+        }
+      ]
+    }
+  ]
+}
