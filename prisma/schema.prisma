@@ -42,6 +42,7 @@ model User {
   requestedDrafts     Draft[]               @relation("DraftRequester")
   deletedDocuments    Document[]            @relation("DocumentDeleter")
   savedVersions       DocumentVersion[]
+  generations         Generation[]
   workspaceMembers    WorkspaceMember[]
   sentInvitations     WorkspaceInvitation[] @relation("InvitationInviter")
   receivedInvitations WorkspaceInvitation[] @relation("InvitationInvitee")
@@ -98,10 +99,11 @@ model Conversation {
   createdAt         DateTime           @default(now()) @map("created_at") @db.DateTime(3) /// 링크 입력(등록) 일시
   deletedAt         DateTime?          @map("deleted_at") @db.DateTime(3) /// 대화 삭제(소프트)
 
-  user                  User?                  @relation(fields: [userId], references: [userId], onDelete: SetNull, map: "fk_conversations_user")
-  workspace             Workspace?             @relation(fields: [workspaceId], references: [workspaceId], onDelete: Cascade, map: "fk_conversations_workspace")
-  messages              ConversationMessage[]
-  documentConversations DocumentConversation[]
+  user                    User?                    @relation(fields: [userId], references: [userId], onDelete: SetNull, map: "fk_conversations_user")
+  workspace               Workspace?               @relation(fields: [workspaceId], references: [workspaceId], onDelete: Cascade, map: "fk_conversations_workspace")
+  messages                ConversationMessage[]
+  documentConversations   DocumentConversation[]
+  generationConversations GenerationConversation[]
 
   @@index([userId, deletedAt, createdAt], map: "idx_conversations_user")
   @@index([userId, captureId], map: "idx_conversations_capture") // 같은 내용 중복 수집 확인
@@ -122,10 +124,12 @@ model ConversationMessage {
   role                  MessageRole
   content               String      @db.MediumText /// 발화 본문 (코드 블록 포함 화면 텍스트)
   sourceMessageId       String      @map("source_message_id") @db.VarChar(100) /// 공유 페이지의 메시지 ID. AI 서버가 출처를 가리킬 때 사용
+  codeBlocks            Json?       @map("code_blocks") /// 수집 모듈이 뽑은 이 발화의 코드 블록 목록(string[]). 코드가 없거나 2026-11-15 이전에 수집한 발화는 NULL. AI-01 codeBlocks로 보냄
 
   conversation Conversation @relation(fields: [conversationId], references: [conversationId], onDelete: Cascade, map: "fk_conversation_messages_conversation")
 
   @@unique([conversationId, sequence], map: "uk_conversation_messages_sequence")
+  @@index([conversationId, sourceMessageId], map: "idx_conversation_messages_source") // AI가 준 출처(sourceId)로 발화 찾기
   @@map("conversation_messages")
 }
 
@@ -141,11 +145,13 @@ enum Category {
   MANUAL // 매뉴얼: 도구·서비스·규칙 등의 절차
 }
 
+/// 2026-11-15부터 문서는 AI 응답을 받은 뒤 DRAFT_GENERATED로 만든다. GENERATING·FAILED는 그 전에 만든 문서에만 남아 있다
+/// (생성 중·생성 실패는 generations.status로 본다)
 enum DocumentStatus {
-  GENERATING // 첫 초안 생성 중 (AI 서버 응답 대기)
+  GENERATING // (예전 데이터) 첫 초안 생성 중
   DRAFT_GENERATED // 초안 생성 완료, 검토 중 (AI 보완 중에도 유지)
   FINALIZED // 초안 채택 완료, 편집 가능
-  FAILED // 첫 초안 생성 실패 (재시도)
+  FAILED // (예전 데이터) 첫 초안 생성 실패
 }
 
 model Document {
@@ -164,8 +170,10 @@ model Document {
   updatedAt    DateTime       @updatedAt @map("updated_at") @db.DateTime(3)
   deletedAt    DateTime?      @map("deleted_at") @db.DateTime(3) /// 휴지통으로 옮긴 일시 (복원하면 NULL, 영구 삭제하면 행 삭제)
   deletedBy    BigInt?        @map("deleted_by") @db.UnsignedBigInt /// 휴지통으로 옮긴 회원 (팀 휴지통에 표시)
+  generationId BigInt?        @map("generation_id") @db.UnsignedBigInt /// 이 문서를 만든 생성 요청. 같은 입력에서 나온 문서끼리 묶음 (2026-11-15 이전 문서는 NULL)
 
   user       User?                  @relation(fields: [userId], references: [userId], onDelete: SetNull, map: "fk_documents_user")
+  generation Generation?            @relation(fields: [generationId], references: [generationId], onDelete: SetNull, map: "fk_documents_generation")
   workspace  Workspace?             @relation(fields: [workspaceId], references: [workspaceId], onDelete: Cascade, map: "fk_documents_workspace")
   lastEditor User?                  @relation("DocumentLastEditor", fields: [lastEditedBy], references: [userId], onDelete: SetNull, map: "fk_documents_last_editor")
   deleter    User?                  @relation("DocumentDeleter", fields: [deletedBy], references: [userId], onDelete: SetNull, map: "fk_documents_deleter")
@@ -179,6 +187,7 @@ model Document {
   @@index([workspaceId, deletedAt, updatedAt], map: "idx_documents_workspace") // 팀 지식 문서·초안 목록
   @@index([createdAt], map: "idx_documents_created") // 관리자 지표: 기간별 문서 생성 수
   @@index([finalizedAt], map: "idx_documents_finalized") // 관리자 지표: 최종 채택일 기준 집계
+  @@index([generationId], map: "idx_documents_generation") // 생성 요청 결과(GEN-01)
   // 한글 검색용 FULLTEXT. Prisma 스키마로는 ngram 파서를 지정할 수 없어서
   // 마이그레이션 SQL에서 WITH PARSER ngram을 직접 붙임 (ERD.md 참고)
   @@fulltext([title, content], map: "ftx_documents_search")
@@ -223,17 +232,17 @@ enum DraftStatus {
   FAILED
 }
 
-/// 생성 실패 원인 (관리자 실패 목록)
+/// 생성 실패 원인 (관리자 실패 목록). drafts(AI 보완)와 generations(첫 생성)에서 같이 쓴다
 enum FailReason {
-  GENERATION_FAILED // 첫 초안: AI 서버 요청 실패 또는 AI 서버가 실패로 응답
+  GENERATION_FAILED // 첫 생성: AI 서버 요청 실패 또는 AI 서버가 실패로 응답
   REVISION_FAILED // AI 보완: AI 서버 요청 실패 또는 AI 서버가 실패로 응답
   INVALID_RESPONSE // 응답 JSON 형식이 맞지 않음 (zod 검증 실패)
   TIMEOUT // 제한 시간 안에 응답이 없음, 또는 기다리는 중 서버가 재시작됨
 }
 
-/// 초안 생성 시도 1번 = 1행. 첫 초안, AI 보완, 실패 후 재시도 모두 새 행을 만든다.
+/// 초안 생성 시도 1번 = 1행. AI 보완, 보완 실패 후 재시도는 새 행을 만든다.
 /// 재시도 행은 실패한 행과 같은 version_no·parent_draft_id를 쓰고, 실패한 행은 FAILED로 남는다.
-/// 그래서 관리자 통계의 시도·실패 횟수와 실패 목록을 이 테이블만으로 계산한다.
+/// 2026-11-15부터 1회차는 AI 응답을 받은 뒤 GENERATED로 바로 만든다. 첫 생성의 시도·실패는 generations에서 센다.
 model Draft {
   draftId       BigInt      @id @default(autoincrement()) @map("draft_id") @db.UnsignedBigInt
   documentId    BigInt      @map("document_id") @db.UnsignedBigInt
@@ -248,6 +257,8 @@ model Draft {
   failReason    FailReason? @map("fail_reason") /// FAILED일 때만
   errorMessage  String?     @map("error_message") @db.VarChar(1000) /// AI 서버 요청 실패 내용이나 AI 서버가 준 에러 메시지 (FAILED일 때만, 길면 잘라서 저장)
   requestedBy   BigInt?     @map("requested_by") @db.UnsignedBigInt /// 이번 회차를 요청한 회원 (첫 생성·AI 보완·다시 시도). 탈퇴로 영구 삭제되면 NULL
+  aiArtifactId  String?     @map("ai_artifact_id") @db.VarChar(64) /// AI v2가 준 문서 artifactId(UUID). 1회차에만 있음 (참고용, AI 서버에 다시 보내지 않음)
+  aiDetail      Json?       @map("ai_detail") /// AI v2 문서 1편에서 기본 5개 필드를 뺀 나머지(review·sourceLinks·metadata·해시 등)를 받은 그대로. 1회차에만 있음
   createdAt     DateTime    @default(now()) @map("created_at") @db.DateTime(3) /// 생성 요청(시도 시작) 일시
 
   document  Document          @relation(fields: [documentId], references: [documentId], onDelete: Cascade, map: "fk_drafts_document")
@@ -322,6 +333,74 @@ model DocumentVersion {
 }
 
 // ---------------------------------------------------------------------
+// 4-2. 생성 요청 (2026-11-15 지식 분할 저장)
+//      대화를 골라 '지식 문서 만들기'를 누른 1번 = AI-01(/v2/analyses) 시도 1번 = 1행.
+//      AI가 몇 편을 줄지 미리 몰라서 문서는 응답을 받은 뒤 만든다 (documents.generation_id로 묶음)
+// ---------------------------------------------------------------------
+
+enum GenerationStatus {
+  GENERATING // AI 서버 응답 대기
+  COMPLETED // 문서 1편 이상 생성
+  NO_CONTENT // AI가 남길 지식이 없다고 답함 (no_content_reason)
+  FAILED // 실패 (fail_reason). '다시 시도'는 새 행
+}
+
+/// AI 자동 검토가 끝났는지 (요청 전체). 검토가 실패해도 초안은 정상 저장된다
+enum ReviewStatus {
+  COMPLETED // 검토 완료
+  INCOMPLETE // 검토 실패·미완료 (review_error)
+  PENDING // AI 서버가 검토 도중 멈춘 결과 (INCOMPLETE와 같이 취급)
+  NOT_APPLICABLE // 문서가 없어 검토 안 함
+}
+
+/// 생성 요청 1번 = 1행. 실패 후 다시 시도하면 새 행을 만들고 retried_from_id에 재시도 묶음의 첫 요청을 넣는다.
+/// AI 서버에는 재시도 묶음의 첫 generation_id를 documentId로 보낸다 (AI가 성공했던 모델 호출을 캐시에서 다시 씀)
+model Generation {
+  generationId    BigInt           @id @default(autoincrement()) @map("generation_id") @db.UnsignedBigInt
+  userId          BigInt?          @map("user_id") @db.UnsignedBigInt /// 생성 요청자 (다시 시도면 다시 시도한 회원). 탈퇴로 영구 삭제되면 NULL
+  workspaceId     BigInt?          @map("workspace_id") @db.UnsignedBigInt /// 팀 워크스페이스. NULL이면 요청자의 개인 워크스페이스
+  retriedFromId   BigInt?          @map("retried_from_id") @db.UnsignedBigInt /// 다시 시도면 재시도 묶음의 첫 요청 (첫 요청은 NULL)
+  status          GenerationStatus @default(GENERATING)
+  failReason      FailReason?      @map("fail_reason") /// FAILED일 때만 (GENERATION_FAILED / INVALID_RESPONSE / TIMEOUT)
+  errorMessage    String?          @map("error_message") @db.VarChar(1000) /// AI 서버 요청 실패 내용이나 AI 서버가 준 에러 메시지 (FAILED일 때만, 길면 잘라서 저장)
+  noContentReason String?          @map("no_content_reason") @db.VarChar(1000) /// AI의 noDocumentReason (NO_CONTENT일 때만)
+  aiRunId         String?          @map("ai_run_id") @db.VarChar(100) /// AI의 runId (문의·디버깅용)
+  reviewStatus    ReviewStatus?    @map("review_status") /// 응답을 받았을 때만
+  reviewError     String?          @map("review_error") @db.VarChar(1000) /// AI reviewError.message (검토 실패일 때만)
+  documentCount   Int              @default(0) @map("document_count") @db.UnsignedInt /// 이 요청으로 만든 문서 수
+  createdAt       DateTime         @default(now()) @map("created_at") @db.DateTime(3) /// 요청 일시
+  completedAt     DateTime?        @map("completed_at") @db.DateTime(3) /// AI 응답을 받아 끝낸 일시 (성공·문서 없음·실패 모두)
+
+  user          User?                    @relation(fields: [userId], references: [userId], onDelete: SetNull, map: "fk_generations_user")
+  workspace     Workspace?               @relation(fields: [workspaceId], references: [workspaceId], onDelete: Cascade, map: "fk_generations_workspace")
+  retriedFrom   Generation?              @relation("GenerationRetry", fields: [retriedFromId], references: [generationId], onDelete: SetNull, map: "fk_generations_retried_from")
+  retries       Generation[]             @relation("GenerationRetry")
+  conversations GenerationConversation[]
+  documents     Document[]
+
+  @@index([userId, createdAt], map: "idx_generations_user")
+  @@index([workspaceId, createdAt], map: "idx_generations_workspace")
+  @@index([retriedFromId], map: "idx_generations_retried_from")
+  @@index([status], map: "idx_generations_status")
+  @@index([createdAt], map: "idx_generations_created") // 관리자 지표: 기간별 생성 시도·실패
+  @@map("generations")
+}
+
+/// 생성 요청에 고른 대화 (N:M). 문서가 아직 없는 생성 중에도 어떤 대화를 쓰는 중인지(대화 삭제 409, 다시 시도 대상)를 알려고 둔다
+model GenerationConversation {
+  generationConversationId BigInt @id @default(autoincrement()) @map("generation_conversation_id") @db.UnsignedBigInt
+  generationId             BigInt @map("generation_id") @db.UnsignedBigInt
+  conversationId           BigInt @map("conversation_id") @db.UnsignedBigInt
+
+  generation   Generation   @relation(fields: [generationId], references: [generationId], onDelete: Cascade, map: "fk_generation_conversations_generation")
+  conversation Conversation @relation(fields: [conversationId], references: [conversationId], onDelete: Cascade, map: "fk_generation_conversations_conversation")
+
+  @@unique([generationId, conversationId], map: "uk_generation_conversations")
+  @@index([conversationId], map: "idx_generation_conversations_conversation")
+  @@map("generation_conversations")
+}
+
+// ---------------------------------------------------------------------
 // 5. 팀 워크스페이스 (2026-11-12)
 //    개인 워크스페이스는 테이블 없이 "workspace_id가 NULL인 내 자료"로 본다
 // ---------------------------------------------------------------------
@@ -339,6 +418,7 @@ model Workspace {
   invitations   WorkspaceInvitation[]
   conversations Conversation[]
   documents     Document[]
+  generations   Generation[]
 
   @@map("workspaces")
 }
