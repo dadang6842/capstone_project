@@ -86,12 +86,12 @@ export const documentService = {
     // 지식 문서 목록(A06). 최종 채택한 문서만 주고, 검토 중인 초안은 미채택 문서 목록(DRAFT-08)에서 본다
     async list(
         userId: number,
-        { page, limit, q, category, sort, workspaceId }: ListDocumentsQuery,
+        { page, limit, category, sort, workspaceId }: ListDocumentsQuery,
     ): Promise<ListDocumentsResponse> {
         const space = await resolveSpace(userId, workspaceId);
         const [documents, totalCount] = await documentRepository.findFinalizedPage(
             spaceFilter(userId, space),
-            { q, category, sort },
+            { category, sort },
             { skip: (page - 1) * limit, take: limit },
         );
         return {

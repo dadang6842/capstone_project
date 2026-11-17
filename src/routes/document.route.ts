@@ -4,20 +4,20 @@ import { authenticate } from "../middlewares/authenticate.js";
 import { validate } from "../middlewares/validate.js";
 import { documentController } from "../controllers/document.controller.js";
 import {
-  createDocumentBodySchema,
-  createDocumentResponseSchema,
-  documentDetailSchema,
-  documentIdParamsSchema,
-  draftHistoryResponseSchema,
-  listDocumentsQuerySchema,
-  listDocumentsResponseSchema,
-  listPendingDocumentsQuerySchema,
-  listTrashQuerySchema,
-  listTrashResponseSchema,
-  pendingDocumentsResponseSchema,
-  restoreDocumentResponseSchema,
-  updateDocumentBodySchema,
-  updateDocumentResponseSchema,
+    createDocumentBodySchema,
+    createDocumentResponseSchema,
+    documentDetailSchema,
+    documentIdParamsSchema,
+    draftHistoryResponseSchema,
+    listDocumentsQuerySchema,
+    listDocumentsResponseSchema,
+    listPendingDocumentsQuerySchema,
+    listTrashQuerySchema,
+    listTrashResponseSchema,
+    pendingDocumentsResponseSchema,
+    restoreDocumentResponseSchema,
+    updateDocumentBodySchema,
+    updateDocumentResponseSchema,
 } from "../schemas/document.schema.js";
 import { successResponse } from "../schemas/common.schema.js";
 import { registry, errorResponses, bearerAuth } from "../docs/openapi.js";
@@ -25,211 +25,269 @@ import { registry, errorResponses, bearerAuth } from "../docs/openapi.js";
 const router = Router();
 
 registry.registerPath({
-  method: "post",
-  path: "/documents",
-  tags: ["Document"],
-  summary: "문서 생성 요청 (DRAFT-01)",
-  description:
-    "화면: A04 문서 생성. 대화 목록에서 고른 대화로 지식 문서 생성을 요청한다. 생성 요청을 GENERATING으로 만들고 바로 202로 응답한 뒤, " +
-    "뒤에서 AI 서버에 생성을 요청한다(AI-01 /v2/analyses, 한 요청에서 지식 문서를 여러 편 받음). 문서는 AI 응답을 받은 뒤 만들어진다. " +
-    "프론트는 응답의 generationId로 생성 요청 상태 조회(GEN-01)를 폴링한다. 실패하면 GEN-02로 다시 시도한다. " +
-    "다른 공간(다른 회원·다른 팀)·삭제한·없는 대화가 섞이면 404(details.conversationIds), 수집이 끝나지 않은 대화가 섞이면 409 CONVERSATION_NOT_COLLECTED, " +
-    "생성·AI 보완이 진행 중인 대화가 섞이면 409 CONVERSATION_IN_USE(details.generationIds·documentIds), " +
-    "고른 대화의 발화 글자 수 합계가 상한(기본 100,000자)을 넘으면 400 INPUT_TOO_LARGE(details.totalChars·maxChars). " +
-    "팀 화면(A04)에서는 body에 workspaceId를 넣고 그 팀의 대화만 고를 수 있다. 요청한 회원이 만들어지는 문서들의 최초 생성 요청자가 된다.",
-  security: bearerAuth,
-  request: { body: { required: true, content: { "application/json": { schema: createDocumentBodySchema } } } },
-  responses: {
-    202: { description: "생성 요청 접수", content: { "application/json": { schema: successResponse(createDocumentResponseSchema) } } },
-    ...errorResponses(
-      "VALIDATION_ERROR",
-      "UNAUTHORIZED",
-      "TOKEN_EXPIRED",
-      "INPUT_TOO_LARGE",
-      "WORKSPACE_NOT_FOUND",
-      "CONVERSATION_NOT_FOUND",
-      "CONVERSATION_NOT_COLLECTED",
-      "CONVERSATION_IN_USE",
-      "SOURCES_DELETED",
-    ),
-  },
+    method: "post",
+    path: "/documents",
+    tags: ["Document"],
+    summary: "문서 생성 요청 (DRAFT-01)",
+    description:
+        "화면: A04 문서 생성. 대화 목록에서 고른 대화로 지식 문서 생성을 요청한다. 생성 요청을 GENERATING으로 만들고 바로 202로 응답한 뒤, " +
+        "뒤에서 AI 서버에 생성을 요청한다(AI-01 /v2/analyses, 한 요청에서 지식 문서를 여러 편 받음). 문서는 AI 응답을 받은 뒤 만들어진다. " +
+        "프론트는 응답의 generationId로 생성 요청 상태 조회(GEN-01)를 폴링한다. 실패하면 GEN-02로 다시 시도한다. " +
+        "다른 공간(다른 회원·다른 팀)·삭제한·없는 대화가 섞이면 404(details.conversationIds), 수집이 끝나지 않은 대화가 섞이면 409 CONVERSATION_NOT_COLLECTED, " +
+        "생성·AI 보완이 진행 중인 대화가 섞이면 409 CONVERSATION_IN_USE(details.generationIds·documentIds), " +
+        "고른 대화의 발화 글자 수 합계가 상한(기본 100,000자)을 넘으면 400 INPUT_TOO_LARGE(details.totalChars·maxChars). " +
+        "팀 화면(A04)에서는 body에 workspaceId를 넣고 그 팀의 대화만 고를 수 있다. 요청한 회원이 만들어지는 문서들의 최초 생성 요청자가 된다.",
+    security: bearerAuth,
+    request: { body: { required: true, content: { "application/json": { schema: createDocumentBodySchema } } } },
+    responses: {
+        202: {
+            description: "생성 요청 접수",
+            content: { "application/json": { schema: successResponse(createDocumentResponseSchema) } },
+        },
+        ...errorResponses(
+            "VALIDATION_ERROR",
+            "UNAUTHORIZED",
+            "TOKEN_EXPIRED",
+            "INPUT_TOO_LARGE",
+            "WORKSPACE_NOT_FOUND",
+            "CONVERSATION_NOT_FOUND",
+            "CONVERSATION_NOT_COLLECTED",
+            "CONVERSATION_IN_USE",
+            "SOURCES_DELETED",
+        ),
+    },
 });
 router.post("/", authenticate, validate({ body: createDocumentBodySchema }), documentController.create);
 
 registry.registerPath({
-  method: "get",
-  path: "/documents",
-  tags: ["Document"],
-  summary: "지식 문서 목록 조회 (DOC-01)",
-  description:
-    "화면: A06 지식 문서 목록 → A07 상세. 최종 채택한 내 문서를 제목·본문 검색어(q)와 지식 유형(category)으로 거르고, 수정일(기본) 또는 생성일 최신순으로 20개씩 준다. " +
-    "검색해도 정렬은 고른 기준을 따르고, totalCount는 조건에 맞는 문서 수다. 검토 중인 초안은 여기 나오지 않는다(미채택 문서 목록 DRAFT-08). " +
-    "workspaceId를 넣으면 그 팀의 최종 문서(팀 화면 A06, 생성 요청자·최근 수정 표시), 생략하면 내 개인 문서만.",
-  security: bearerAuth,
-  request: { query: listDocumentsQuerySchema },
-  responses: {
-    200: { description: "지식 문서 목록", content: { "application/json": { schema: successResponse(listDocumentsResponseSchema) } } },
-    ...errorResponses("VALIDATION_ERROR", "UNAUTHORIZED", "TOKEN_EXPIRED", "WORKSPACE_NOT_FOUND"),
-  },
+    method: "get",
+    path: "/documents",
+    tags: ["Document"],
+    summary: "지식 문서 목록 조회 (DOC-01)",
+    description:
+        "화면: A06 지식 문서 목록 → A07 상세. 최종 채택한 내 문서를 지식 유형(category)으로 거르고, 수정일(기본) 또는 생성일 최신순으로 20개씩 준다. " +
+        "totalCount는 조건에 맞는 문서 수다. 문서 검색은 AI 검색(SEARCH-01)으로 한다. 검토 중인 초안은 여기 나오지 않는다(미채택 문서 목록 DRAFT-08). " +
+        "workspaceId를 넣으면 그 팀의 최종 문서(팀 화면 A06, 생성 요청자·최근 수정 표시), 생략하면 내 개인 문서만.",
+    security: bearerAuth,
+    request: { query: listDocumentsQuerySchema },
+    responses: {
+        200: {
+            description: "지식 문서 목록",
+            content: { "application/json": { schema: successResponse(listDocumentsResponseSchema) } },
+        },
+        ...errorResponses("VALIDATION_ERROR", "UNAUTHORIZED", "TOKEN_EXPIRED", "WORKSPACE_NOT_FOUND"),
+    },
 });
 router.get("/", authenticate, validate({ query: listDocumentsQuerySchema }), documentController.list);
 
 // /:documentId 라우트보다 먼저 둔다 ("pending"이 문서 아이디로 읽히지 않게)
 registry.registerPath({
-  method: "get",
-  path: "/documents/pending",
-  tags: ["Document"],
-  summary: "미채택 문서 목록 (DRAFT-08)",
-  description:
-    "초안 검토 화면의 '초안 문서 선택'에 쓰는 목록. 검토할 초안이 있는(DRAFT_GENERATED) 내 문서를 원문 대화의 삭제 여부와 관계없이 " +
-    "최근 생성순으로 준다(삭제한 문서 제외). title·summary는 생성이 끝난 최신 회차 것이고, generationId가 같은 문서는 같은 입력에서 나온 초안이다. " +
-    "아직 문서가 없는 생성 요청(생성 중, 최근 7일 안의 실패·남길 내용 없음)은 generations에 따로 준다. " +
-    "어떤 회차를 보여 줄지·보완 중인 회차는 문서를 고른 뒤 DRAFT-06으로 조회한다. " +
-    "workspaceId를 넣으면 그 팀의 미채택 문서(팀 화면 A05, 생성 요청자 표시), 생략하면 내 개인 문서만.",
-  security: bearerAuth,
-  request: { query: listPendingDocumentsQuerySchema },
-  responses: {
-    200: { description: "미채택 문서 목록", content: { "application/json": { schema: successResponse(pendingDocumentsResponseSchema) } } },
-    ...errorResponses("VALIDATION_ERROR", "UNAUTHORIZED", "TOKEN_EXPIRED", "WORKSPACE_NOT_FOUND"),
-  },
+    method: "get",
+    path: "/documents/pending",
+    tags: ["Document"],
+    summary: "미채택 문서 목록 (DRAFT-08)",
+    description:
+        "초안 검토 화면의 '초안 문서 선택'에 쓰는 목록. 검토할 초안이 있는(DRAFT_GENERATED) 내 문서를 원문 대화의 삭제 여부와 관계없이 " +
+        "최근 생성순으로 준다(삭제한 문서 제외). title·summary는 생성이 끝난 최신 회차 것이고, generationId가 같은 문서는 같은 입력에서 나온 초안이다. " +
+        "아직 문서가 없는 생성 요청(생성 중, 최근 7일 안의 실패·남길 내용 없음)은 generations에 따로 준다. " +
+        "어떤 회차를 보여 줄지·보완 중인 회차는 문서를 고른 뒤 DRAFT-06으로 조회한다. " +
+        "workspaceId를 넣으면 그 팀의 미채택 문서(팀 화면 A05, 생성 요청자 표시), 생략하면 내 개인 문서만.",
+    security: bearerAuth,
+    request: { query: listPendingDocumentsQuerySchema },
+    responses: {
+        200: {
+            description: "미채택 문서 목록",
+            content: { "application/json": { schema: successResponse(pendingDocumentsResponseSchema) } },
+        },
+        ...errorResponses("VALIDATION_ERROR", "UNAUTHORIZED", "TOKEN_EXPIRED", "WORKSPACE_NOT_FOUND"),
+    },
 });
-router.get("/pending", authenticate, validate({ query: listPendingDocumentsQuerySchema }), documentController.listPending);
+router.get(
+    "/pending",
+    authenticate,
+    validate({ query: listPendingDocumentsQuerySchema }),
+    documentController.listPending,
+);
 
 // /:documentId 라우트보다 먼저 둔다 ("trash"가 문서 아이디로 읽히지 않게)
 registry.registerPath({
-  method: "get",
-  path: "/documents/trash",
-  tags: ["Document"],
-  summary: "휴지통 목록 (TRASH-01)",
-  description:
-    "화면: 사이드바 '삭제한 문서'. 삭제(DOC-04)한 문서를 삭제일 최신순으로 20개씩 준다. 최종 문서와 미채택 문서(검토 중·생성 실패)가 같이 나오고 status로 구분한다. " +
-    "workspaceId를 넣으면 그 팀의 휴지통(팀원 누구나 볼 수 있음), 생략하면 내 개인 휴지통. canRestore가 false면 복원·영구 삭제 버튼을 숨긴다. 자동으로 비우지 않는다.",
-  security: bearerAuth,
-  request: { query: listTrashQuerySchema },
-  responses: {
-    200: { description: "휴지통 목록", content: { "application/json": { schema: successResponse(listTrashResponseSchema) } } },
-    ...errorResponses("VALIDATION_ERROR", "UNAUTHORIZED", "TOKEN_EXPIRED", "WORKSPACE_NOT_FOUND"),
-  },
+    method: "get",
+    path: "/documents/trash",
+    tags: ["Document"],
+    summary: "휴지통 목록 (TRASH-01)",
+    description:
+        "화면: 사이드바 '삭제한 문서'. 삭제(DOC-04)한 문서를 삭제일 최신순으로 20개씩 준다. 최종 문서와 미채택 문서(검토 중·생성 실패)가 같이 나오고 status로 구분한다. " +
+        "workspaceId를 넣으면 그 팀의 휴지통(팀원 누구나 볼 수 있음), 생략하면 내 개인 휴지통. canRestore가 false면 복원·영구 삭제 버튼을 숨긴다. 자동으로 비우지 않는다.",
+    security: bearerAuth,
+    request: { query: listTrashQuerySchema },
+    responses: {
+        200: {
+            description: "휴지통 목록",
+            content: { "application/json": { schema: successResponse(listTrashResponseSchema) } },
+        },
+        ...errorResponses("VALIDATION_ERROR", "UNAUTHORIZED", "TOKEN_EXPIRED", "WORKSPACE_NOT_FOUND"),
+    },
 });
 router.get("/trash", authenticate, validate({ query: listTrashQuerySchema }), documentController.listTrash);
 
 registry.registerPath({
-  method: "post",
-  path: "/documents/{documentId}/restore",
-  tags: ["Document"],
-  summary: "휴지통에서 복원 (TRASH-02)",
-  description:
-    "화면: 삭제한 문서의 '복원'. 문서를 휴지통에서 꺼내 원래 목록(최종 문서는 지식 문서 목록, 미채택 문서는 초안 검토·대화 목록)으로 돌려놓는다. " +
-    "권한은 삭제와 같다: 팀 최종 문서는 소유자·관리자만, 미채택 문서는 소유자·관리자·생성 요청자 (아니면 403). 휴지통에 없는 문서는 404.",
-  security: bearerAuth,
-  request: { params: documentIdParamsSchema },
-  responses: {
-    200: { description: "복원 완료", content: { "application/json": { schema: successResponse(restoreDocumentResponseSchema) } } },
-    ...errorResponses("VALIDATION_ERROR", "UNAUTHORIZED", "TOKEN_EXPIRED", "FORBIDDEN", "DOCUMENT_NOT_FOUND"),
-  },
+    method: "post",
+    path: "/documents/{documentId}/restore",
+    tags: ["Document"],
+    summary: "휴지통에서 복원 (TRASH-02)",
+    description:
+        "화면: 삭제한 문서의 '복원'. 문서를 휴지통에서 꺼내 원래 목록(최종 문서는 지식 문서 목록, 미채택 문서는 초안 검토·대화 목록)으로 돌려놓는다. " +
+        "권한은 삭제와 같다: 팀 최종 문서는 소유자·관리자만, 미채택 문서는 소유자·관리자·생성 요청자 (아니면 403). 휴지통에 없는 문서는 404.",
+    security: bearerAuth,
+    request: { params: documentIdParamsSchema },
+    responses: {
+        200: {
+            description: "복원 완료",
+            content: { "application/json": { schema: successResponse(restoreDocumentResponseSchema) } },
+        },
+        ...errorResponses("VALIDATION_ERROR", "UNAUTHORIZED", "TOKEN_EXPIRED", "FORBIDDEN", "DOCUMENT_NOT_FOUND"),
+    },
 });
-router.post("/:documentId/restore", authenticate, validate({ params: documentIdParamsSchema }), documentController.restore);
-
-registry.registerPath({
-  method: "delete",
-  path: "/documents/{documentId}/permanent",
-  tags: ["Document"],
-  summary: "휴지통에서 영구 삭제 (TRASH-03)",
-  description:
-    "화면: 삭제한 문서의 '영구 삭제' (확인 팝업). 문서와 초안·키워드·저장 이력·대화 연결을 모두 지운다(복구 불가). 원본 대화는 남는다. " +
-    "권한은 복원과 같다. 휴지통에 없는 문서는 404 (먼저 DOC-04로 휴지통에 옮겨야 함).",
-  security: bearerAuth,
-  request: { params: documentIdParamsSchema },
-  responses: {
-    200: { description: "영구 삭제 완료 (data: null)", content: { "application/json": { schema: successResponse(z.null()) } } },
-    ...errorResponses("VALIDATION_ERROR", "UNAUTHORIZED", "TOKEN_EXPIRED", "FORBIDDEN", "DOCUMENT_NOT_FOUND"),
-  },
-});
-router.delete("/:documentId/permanent", authenticate, validate({ params: documentIdParamsSchema }), documentController.deletePermanently);
-
-registry.registerPath({
-  method: "get",
-  path: "/documents/{documentId}/drafts",
-  tags: ["Document"],
-  summary: "문서의 초안 이력 조회 (DRAFT-06)",
-  description:
-    "초안 검토 화면의 회차 선택에 쓴다. 생성이 끝난(GENERATED·ACCEPTED) 회차의 아이디·번호만 준다. latestDraftId는 처음 보여 줄 회차, " +
-    "revision은 마지막 AI 보완이 생성 중(GENERATING, 버튼을 막고 DRAFT-02로 폴링)이거나 실패(FAILED, 실패 안내와 다시 시도)일 때만 주고 아니면 null. " +
-    "다른 회원의 문서, 삭제한 문서는 404.",
-  security: bearerAuth,
-  request: { params: documentIdParamsSchema },
-  responses: {
-    200: { description: "초안 회차 목록", content: { "application/json": { schema: successResponse(draftHistoryResponseSchema) } } },
-    ...errorResponses("VALIDATION_ERROR", "UNAUTHORIZED", "TOKEN_EXPIRED", "DOCUMENT_NOT_FOUND"),
-  },
-});
-router.get(
-  "/:documentId/drafts",
-  authenticate,
-  validate({ params: documentIdParamsSchema }),
-  documentController.listDrafts,
+router.post(
+    "/:documentId/restore",
+    authenticate,
+    validate({ params: documentIdParamsSchema }),
+    documentController.restore,
 );
 
 registry.registerPath({
-  method: "get",
-  path: "/documents/{documentId}",
-  tags: ["Document"],
-  summary: "지식 문서 상세 조회 (DOC-02)",
-  description:
-    "화면: A06·A05(최종 채택 후) → A07 지식 문서 상세. 최종 채택한 문서의 본문·키워드와 연결된 원문 대화를 준다. " +
-    "원문 열람은 conversations[]의 아이디로 원본 대화 열람(CONV-03), 삭제된 원문은 deleted: true. 채택 전 문서, 다른 회원·삭제한 문서는 404." +
-    " 팀 문서를 보려면 그 팀의 팀원이어야 한다(아니면 404).",
-  security: bearerAuth,
-  request: { params: documentIdParamsSchema },
-  responses: {
-    200: { description: "지식 문서 상세", content: { "application/json": { schema: successResponse(documentDetailSchema) } } },
-    ...errorResponses("VALIDATION_ERROR", "UNAUTHORIZED", "TOKEN_EXPIRED", "DOCUMENT_NOT_FOUND"),
-  },
+    method: "delete",
+    path: "/documents/{documentId}/permanent",
+    tags: ["Document"],
+    summary: "휴지통에서 영구 삭제 (TRASH-03)",
+    description:
+        "화면: 삭제한 문서의 '영구 삭제' (확인 팝업). 문서와 초안·키워드·저장 이력·대화 연결을 모두 지운다(복구 불가). 원본 대화는 남는다. " +
+        "권한은 복원과 같다. 휴지통에 없는 문서는 404 (먼저 DOC-04로 휴지통에 옮겨야 함).",
+    security: bearerAuth,
+    request: { params: documentIdParamsSchema },
+    responses: {
+        200: {
+            description: "영구 삭제 완료 (data: null)",
+            content: { "application/json": { schema: successResponse(z.null()) } },
+        },
+        ...errorResponses("VALIDATION_ERROR", "UNAUTHORIZED", "TOKEN_EXPIRED", "FORBIDDEN", "DOCUMENT_NOT_FOUND"),
+    },
+});
+router.delete(
+    "/:documentId/permanent",
+    authenticate,
+    validate({ params: documentIdParamsSchema }),
+    documentController.deletePermanently,
+);
+
+registry.registerPath({
+    method: "get",
+    path: "/documents/{documentId}/drafts",
+    tags: ["Document"],
+    summary: "문서의 초안 이력 조회 (DRAFT-06)",
+    description:
+        "초안 검토 화면의 회차 선택에 쓴다. 생성이 끝난(GENERATED·ACCEPTED) 회차의 아이디·번호만 준다. latestDraftId는 처음 보여 줄 회차, " +
+        "revision은 마지막 AI 보완이 생성 중(GENERATING, 버튼을 막고 DRAFT-02로 폴링)이거나 실패(FAILED, 실패 안내와 다시 시도)일 때만 주고 아니면 null. " +
+        "다른 회원의 문서, 삭제한 문서는 404.",
+    security: bearerAuth,
+    request: { params: documentIdParamsSchema },
+    responses: {
+        200: {
+            description: "초안 회차 목록",
+            content: { "application/json": { schema: successResponse(draftHistoryResponseSchema) } },
+        },
+        ...errorResponses("VALIDATION_ERROR", "UNAUTHORIZED", "TOKEN_EXPIRED", "DOCUMENT_NOT_FOUND"),
+    },
+});
+router.get(
+    "/:documentId/drafts",
+    authenticate,
+    validate({ params: documentIdParamsSchema }),
+    documentController.listDrafts,
+);
+
+registry.registerPath({
+    method: "get",
+    path: "/documents/{documentId}",
+    tags: ["Document"],
+    summary: "지식 문서 상세 조회 (DOC-02)",
+    description:
+        "화면: A06·A05(최종 채택 후) → A07 지식 문서 상세. 최종 채택한 문서의 본문·키워드와 연결된 원문 대화를 준다. " +
+        "원문 열람은 conversations[]의 아이디로 원본 대화 열람(CONV-03), 삭제된 원문은 deleted: true. 채택 전 문서, 다른 회원·삭제한 문서는 404." +
+        " 팀 문서를 보려면 그 팀의 팀원이어야 한다(아니면 404).",
+    security: bearerAuth,
+    request: { params: documentIdParamsSchema },
+    responses: {
+        200: {
+            description: "지식 문서 상세",
+            content: { "application/json": { schema: successResponse(documentDetailSchema) } },
+        },
+        ...errorResponses("VALIDATION_ERROR", "UNAUTHORIZED", "TOKEN_EXPIRED", "DOCUMENT_NOT_FOUND"),
+    },
 });
 router.get("/:documentId", authenticate, validate({ params: documentIdParamsSchema }), documentController.get);
 
 registry.registerPath({
-  method: "patch",
-  path: "/documents/{documentId}",
-  tags: ["Document"],
-  summary: "지식 문서 직접 수정 (DOC-03)",
-  description:
-    "화면: A07-1 지식 문서 직접 수정 → A07. 최종 채택한 문서의 제목·본문·키워드 중 보낸 것만 저장하고 수정일을 갱신한다(이전 내용은 보관하지 않음). " +
-    "키워드를 보내면 그 목록으로 통째로 바뀐다. 지식 유형·요약은 수정할 수 없다. 채택 전 문서는 409 DOCUMENT_NOT_FINALIZED. " +
-    "팀 최종 문서는 팀원 누구나 수정할 수 있고, 수정한 회원이 최근 수정자(lastEditor)가 된다.",
-  security: bearerAuth,
-  request: {
-    params: documentIdParamsSchema,
-    body: { required: true, content: { "application/json": { schema: updateDocumentBodySchema } } },
-  },
-  responses: {
-    200: { description: "수정 완료", content: { "application/json": { schema: successResponse(updateDocumentResponseSchema) } } },
-    ...errorResponses("VALIDATION_ERROR", "UNAUTHORIZED", "TOKEN_EXPIRED", "DOCUMENT_NOT_FOUND", "DOCUMENT_NOT_FINALIZED"),
-  },
+    method: "patch",
+    path: "/documents/{documentId}",
+    tags: ["Document"],
+    summary: "지식 문서 직접 수정 (DOC-03)",
+    description:
+        "화면: A07-1 지식 문서 직접 수정 → A07. 최종 채택한 문서의 제목·본문·키워드 중 보낸 것만 저장하고 수정일을 갱신한다(이전 내용은 보관하지 않음). " +
+        "키워드를 보내면 그 목록으로 통째로 바뀐다. 지식 유형·요약은 수정할 수 없다. 채택 전 문서는 409 DOCUMENT_NOT_FINALIZED. " +
+        "팀 최종 문서는 팀원 누구나 수정할 수 있고, 수정한 회원이 최근 수정자(lastEditor)가 된다.",
+    security: bearerAuth,
+    request: {
+        params: documentIdParamsSchema,
+        body: { required: true, content: { "application/json": { schema: updateDocumentBodySchema } } },
+    },
+    responses: {
+        200: {
+            description: "수정 완료",
+            content: { "application/json": { schema: successResponse(updateDocumentResponseSchema) } },
+        },
+        ...errorResponses(
+            "VALIDATION_ERROR",
+            "UNAUTHORIZED",
+            "TOKEN_EXPIRED",
+            "DOCUMENT_NOT_FOUND",
+            "DOCUMENT_NOT_FINALIZED",
+        ),
+    },
 });
 router.patch(
-  "/:documentId",
-  authenticate,
-  validate({ params: documentIdParamsSchema, body: updateDocumentBodySchema }),
-  documentController.update,
+    "/:documentId",
+    authenticate,
+    validate({ params: documentIdParamsSchema, body: updateDocumentBodySchema }),
+    documentController.update,
 );
 
 registry.registerPath({
-  method: "delete",
-  path: "/documents/{documentId}",
-  tags: ["Document"],
-  summary: "문서 삭제 - 휴지통으로 (DOC-04)",
-  description:
-    "화면: A07 ⑤ 문서 삭제·A05 초안 문서 삭제 → P03 삭제 확인. 문서를 휴지통으로 옮겨 목록에서 뺀다(복원 TRASH-02, 영구 삭제 TRASH-03). " +
-    "최종 문서와 미채택 문서(검토 중·생성 실패) 모두 지울 수 있고, 첫 초안 생성 중이거나 AI 보완 중이면 409 INVALID_DRAFT_STATUS. " +
-    "연결된 원본 대화는 지우지 않는다. 다른 회원·이미 삭제한 문서는 404. " +
-    "팀 권한: 최종 문서는 소유자·관리자만(일반 구성원은 본인이 만든 문서도 403), 미채택 문서는 소유자·관리자·생성 요청자.",
-  security: bearerAuth,
-  request: { params: documentIdParamsSchema },
-  responses: {
-    200: { description: "삭제 완료 (data: null)", content: { "application/json": { schema: successResponse(z.null()) } } },
-    ...errorResponses("VALIDATION_ERROR", "UNAUTHORIZED", "TOKEN_EXPIRED", "FORBIDDEN", "DOCUMENT_NOT_FOUND", "INVALID_DRAFT_STATUS"),
-  },
+    method: "delete",
+    path: "/documents/{documentId}",
+    tags: ["Document"],
+    summary: "문서 삭제 - 휴지통으로 (DOC-04)",
+    description:
+        "화면: A07 ⑤ 문서 삭제·A05 초안 문서 삭제 → P03 삭제 확인. 문서를 휴지통으로 옮겨 목록에서 뺀다(복원 TRASH-02, 영구 삭제 TRASH-03). " +
+        "최종 문서와 미채택 문서(검토 중·생성 실패) 모두 지울 수 있고, 첫 초안 생성 중이거나 AI 보완 중이면 409 INVALID_DRAFT_STATUS. " +
+        "연결된 원본 대화는 지우지 않는다. 다른 회원·이미 삭제한 문서는 404. " +
+        "팀 권한: 최종 문서는 소유자·관리자만(일반 구성원은 본인이 만든 문서도 403), 미채택 문서는 소유자·관리자·생성 요청자.",
+    security: bearerAuth,
+    request: { params: documentIdParamsSchema },
+    responses: {
+        200: {
+            description: "삭제 완료 (data: null)",
+            content: { "application/json": { schema: successResponse(z.null()) } },
+        },
+        ...errorResponses(
+            "VALIDATION_ERROR",
+            "UNAUTHORIZED",
+            "TOKEN_EXPIRED",
+            "FORBIDDEN",
+            "DOCUMENT_NOT_FOUND",
+            "INVALID_DRAFT_STATUS",
+        ),
+    },
 });
 router.delete("/:documentId", authenticate, validate({ params: documentIdParamsSchema }), documentController.delete);
 
