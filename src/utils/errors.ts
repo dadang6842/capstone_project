@@ -127,6 +127,26 @@ export const ERRORS = {
         message: "AI 검색을 사용할 수 없습니다.",
     },
 
+    // 문서 관계도 (2026-11-17)
+    AI_RELATIONS_FAILED: {
+        no: 5008,
+        title: "문서 관계도 계산 실패",
+        status: 502,
+        message: "문서 관계도를 만들지 못했습니다. 잠시 후 다시 시도해 주세요.",
+    },
+    AI_RELATIONS_UNAVAILABLE: {
+        no: 5009,
+        title: "문서 관계도 사용 불가",
+        status: 503,
+        message: "문서 관계도를 사용할 수 없습니다.",
+    },
+    RELATIONS_TOO_LARGE: {
+        no: 5010,
+        title: "관계도 문서 수 초과",
+        status: 413,
+        message: "문서가 너무 많아 관계도를 그릴 수 없습니다.",
+    },
+
     // 팀 워크스페이스
     WORKSPACE_NOT_FOUND: { no: 6001, title: "팀 없음", status: 404, message: "팀을 찾을 수 없습니다." },
     MEMBER_NOT_FOUND: { no: 6002, title: "팀 구성원 아님", status: 404, message: "팀 구성원을 찾을 수 없습니다." },
@@ -168,6 +188,7 @@ export const INTERNAL_ERRORS = {
     AI_GENERATION_FAILED: { no: 7003, title: "AI 서버 초안 생성 실패 응답" },
     AI_INVALID_RESPONSE: { no: 7005, title: "AI 서버 응답 형식 불일치" },
     AI_SEARCH_REQUEST_FAILED: { no: 7006, title: "AI 검색·색인 동기화 요청 실패" },
+    AI_RELATIONS_REQUEST_FAILED: { no: 7007, title: "AI 관계도 동기화·조회 요청 실패" },
     DATABASE_ERROR: { no: 8001, title: "DB 처리 실패" },
     WITHDRAWAL_PURGE_FAILED: { no: 8002, title: "탈퇴 회원 영구 삭제 실패" },
 } as const satisfies Record<string, { no: number; title: string }>;

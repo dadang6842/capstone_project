@@ -4,6 +4,7 @@ import { documentRepository } from "../repositories/document.repository.js";
 import { findEditableDraft } from "./draft.service.js";
 import { getAccess } from "./workspaceAccess.js";
 import { touchSearchIndex } from "./searchIndex.js";
+import { touchRelationIndex } from "./relationIndex.js";
 import { toUserRef } from "../schemas/common.schema.js";
 import { AppError } from "../utils/appError.js";
 import type { ListVersionsResponse, VersionDetail, VersionListItem } from "../schemas/version.schema.js";
@@ -82,8 +83,9 @@ export const versionService = {
         const restored = await versionRepository.restoreDocument(version, BigInt(userId));
         // 확인한 뒤 저장하기 전에 삭제된 경우
         if (!restored) throw new AppError("DOCUMENT_NOT_FOUND");
-        // AI 검색 색인에 복원한 내용을 반영한다 (뒤에서)
+        // AI 검색 색인·관계도에 복원한 내용을 반영한다 (뒤에서)
         void touchSearchIndex([version.documentId]);
+        void touchRelationIndex([version.documentId]);
         return toDetail(restored);
     },
 };

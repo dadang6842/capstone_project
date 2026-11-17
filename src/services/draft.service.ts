@@ -4,6 +4,7 @@ import type { ConversationWithMessages } from "../repositories/conversation.repo
 import { draftRepository } from "../repositories/draft.repository.js";
 import { canEditDraft, getAccess } from "./workspaceAccess.js";
 import { touchSearchIndex } from "./searchIndex.js";
+import { touchRelationIndex } from "./relationIndex.js";
 import { toUserRef } from "../schemas/common.schema.js";
 import { describeAiError, requestRevision, toAnalysisConversation } from "../utils/aiServer.js";
 import { AppError } from "../utils/appError.js";
@@ -306,8 +307,9 @@ export const draftService = {
             BigInt(userId),
         );
         if (!finalizedAt) throw new AppError("INVALID_DRAFT_STATUS");
-        // 채택한 문서는 AI 검색 대상이 된다 (뒤에서)
+        // 채택한 문서는 AI 검색·관계도 대상이 된다 (뒤에서)
         void touchSearchIndex([draft.documentId]);
+        void touchRelationIndex([draft.documentId]);
 
         return { documentId: Number(draft.documentId), status: "FINALIZED", finalizedAt };
     },
@@ -350,8 +352,9 @@ export const draftService = {
         );
         // 확인한 뒤 저장하기 전에 다른 사람이 채택한 경우 등 (전부 되돌림)
         if (!finalizedAt) throw new AppError("INVALID_DRAFT_STATUS");
-        // 채택한 문서들은 AI 검색 대상이 된다 (뒤에서)
+        // 채택한 문서들은 AI 검색·관계도 대상이 된다 (뒤에서)
         void touchSearchIndex(targets.map((draft) => draft.documentId));
+        void touchRelationIndex(targets.map((draft) => draft.documentId));
 
         return {
             documents: targets.map((draft) => ({
