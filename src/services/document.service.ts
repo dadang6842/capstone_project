@@ -11,6 +11,7 @@ import {
 } from "./workspaceAccess.js";
 import { ensureNotInUse, sendGenerationRequest, toAnalysisInput, toGenerationCards } from "./generation.service.js";
 import { touchSearchIndex } from "./searchIndex.js";
+import { touchRelationIndex } from "./relationIndex.js";
 import { AppError } from "../utils/appError.js";
 import { toPageInfo, toUserRef } from "../schemas/common.schema.js";
 import type {
@@ -166,8 +167,9 @@ export const documentService = {
         });
         // 확인한 뒤 저장하기 전에 삭제된 경우
         if (!updated) throw new AppError("DOCUMENT_NOT_FOUND");
-        // AI 검색 색인에 바뀐 내용을 반영한다 (뒤에서)
+        // AI 검색 색인·관계도에 바뀐 내용을 반영한다 (뒤에서, 둘은 따로 동기화)
         void touchSearchIndex([updated.documentId]);
+        void touchRelationIndex([updated.documentId]);
 
         return {
             documentId: Number(updated.documentId),
@@ -192,8 +194,9 @@ export const documentService = {
             const latest = await documentRepository.findState(BigInt(documentId));
             throw new AppError(!latest || latest.deletedAt ? "DOCUMENT_NOT_FOUND" : "INVALID_DRAFT_STATUS");
         }
-        // 최종 문서였다면 AI 검색 대상에서 빠진다 (뒤에서)
+        // 최종 문서였다면 AI 검색·관계도 대상에서 빠진다 (뒤에서)
         void touchSearchIndex([BigInt(documentId)]);
+        void touchRelationIndex([BigInt(documentId)]);
     },
 
     // 휴지통 목록(사이드바 "삭제한 문서"). 공간은 지식 문서 목록과 같은 기준이고, 문서마다 내가 복원·영구 삭제할 수 있는지(canRestore)를 준다
@@ -230,8 +233,9 @@ export const documentService = {
     async restore(userId: number, documentId: number): Promise<RestoreDocumentResponse> {
         const document = await requireTrashManager(userId, documentId);
         if (!(await documentRepository.restoreFromTrash(BigInt(documentId)))) throw new AppError("DOCUMENT_NOT_FOUND");
-        // 최종 문서면 다시 AI 검색 대상이 된다 (뒤에서)
+        // 최종 문서면 다시 AI 검색·관계도 대상이 된다 (뒤에서)
         void touchSearchIndex([BigInt(documentId)]);
+        void touchRelationIndex([BigInt(documentId)]);
         return { documentId, status: document.status as RestoreDocumentResponse["status"] };
     },
 

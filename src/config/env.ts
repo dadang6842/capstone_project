@@ -28,6 +28,12 @@ const envSchema = z.object({
     AI_SEARCH_TIMEOUT_MS: z.coerce.number().int().positive().default(300_000),
     // 문서 수정·삭제·채택 뒤 색인 동기화를 미뤘다 보내는 시간. 연달아 고치면 마지막 한 번만 보낸다
     AI_SEARCH_SYNC_DELAY_MS: z.coerce.number().int().min(0).default(3_000),
+    // 문서 관계도 (2026-11-17). AI 서버 ai.env의 AI_ENABLE_RELATIONS=true와 같이 켠다. 꺼져 있으면 관계도 API는 503, 관계도 동기화도 안 보낸다
+    AI_RELATIONS_ENABLED: z.stringbool().default(false),
+    // 관계도 요청 하나를 기다리는 최대 시간. 처음 계산(임베딩)은 AI 서버가 280초 예산을 쓰므로 기본 5분
+    AI_RELATIONS_TIMEOUT_MS: z.coerce.number().int().positive().default(300_000),
+    // 문서 수정·삭제·채택 뒤 관계도 동기화를 미뤘다 보내는 시간. 연달아 고치면 마지막 한 번만 보낸다
+    AI_RELATIONS_SYNC_DELAY_MS: z.coerce.number().int().min(0).default(3_000),
 });
 
 export const env = envSchema.parse(process.env);

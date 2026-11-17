@@ -3,6 +3,7 @@
 ai_data
 tests
 tests_search
+tests_relations
 examples
 **/__pycache__
 *.pyc
