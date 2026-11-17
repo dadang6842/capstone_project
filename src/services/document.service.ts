@@ -1,258 +1,300 @@
 import { conversationRepository } from "../repositories/conversation.repository.js";
 import { documentRepository } from "../repositories/document.repository.js";
 import { generationRepository } from "../repositories/generation.repository.js";
-import { canDeleteDocument, findMembership, getAccess, resolveSpace, spaceFilter, type Access } from "./workspaceAccess.js";
+import {
+    canDeleteDocument,
+    findMembership,
+    getAccess,
+    resolveSpace,
+    spaceFilter,
+    type Access,
+} from "./workspaceAccess.js";
 import { ensureNotInUse, sendGenerationRequest, toAnalysisInput, toGenerationCards } from "./generation.service.js";
+import { touchSearchIndex } from "./searchIndex.js";
 import { AppError } from "../utils/appError.js";
 import { toPageInfo, toUserRef } from "../schemas/common.schema.js";
 import type {
-  CreateDocumentBody,
-  CreateDocumentResponse,
-  DocumentDetail,
-  DraftHistoryResponse,
-  ListDocumentsQuery,
-  ListPendingDocumentsQuery,
-  ListTrashQuery,
-  ListTrashResponse,
-  RestoreDocumentResponse,
-  ListDocumentsResponse,
-  PendingDocumentsResponse,
-  UpdateDocumentBody,
-  UpdateDocumentResponse,
+    CreateDocumentBody,
+    CreateDocumentResponse,
+    DocumentDetail,
+    DraftHistoryResponse,
+    ListDocumentsQuery,
+    ListPendingDocumentsQuery,
+    ListTrashQuery,
+    ListTrashResponse,
+    RestoreDocumentResponse,
+    ListDocumentsResponse,
+    PendingDocumentsResponse,
+    UpdateDocumentBody,
+    UpdateDocumentResponse,
 } from "../schemas/document.schema.js";
 
 // 휴지통에 있는 문서를 복원·영구 삭제할 수 있는지 확인한다 (삭제 권한과 같음)
 async function requireTrashManager(userId: number, documentId: number) {
-  const document = await documentRepository.findState(BigInt(documentId));
-  const access = document?.deletedAt ? await getAccess(userId, document) : null;
-  if (!document || !access) throw new AppError("DOCUMENT_NOT_FOUND");
-  if (!canDeleteDocument(access, document.status === "FINALIZED")) throw new AppError("FORBIDDEN");
-  return document;
+    const document = await documentRepository.findState(BigInt(documentId));
+    const access = document?.deletedAt ? await getAccess(userId, document) : null;
+    if (!document || !access) throw new AppError("DOCUMENT_NOT_FOUND");
+    if (!canDeleteDocument(access, document.status === "FINALIZED")) throw new AppError("FORBIDDEN");
+    return document;
 }
 
 export const documentService = {
-  // 생성 요청(GENERATING)만 만들고 바로 응답한다(202). AI 서버 요청(AI-01 /v2/analyses)은 응답과 상관없이 뒤에서 보낸다(비동기).
-  // AI가 몇 편을 줄지 미리 몰라서 문서는 AI 응답을 받은 뒤 한 번에 만든다. 프론트는 generationId로 생성 요청 상태 조회(GEN-01)를 폴링한다.
-  // 팀 공간이면 팀원 누구나 요청할 수 있고, 요청한 회원이 만들어지는 문서들의 최초 생성 요청자(documents.user_id)가 된다
-  async create(userId: number, { conversationIds, workspaceId }: CreateDocumentBody): Promise<CreateDocumentResponse> {
-    const space = await resolveSpace(userId, workspaceId);
-    const ids = conversationIds.map(BigInt);
+    // 생성 요청(GENERATING)만 만들고 바로 응답한다(202). AI 서버 요청(AI-01 /v2/analyses)은 응답과 상관없이 뒤에서 보낸다(비동기).
+    // AI가 몇 편을 줄지 미리 몰라서 문서는 AI 응답을 받은 뒤 한 번에 만든다. 프론트는 generationId로 생성 요청 상태 조회(GEN-01)를 폴링한다.
+    // 팀 공간이면 팀원 누구나 요청할 수 있고, 요청한 회원이 만들어지는 문서들의 최초 생성 요청자(documents.user_id)가 된다
+    async create(
+        userId: number,
+        { conversationIds, workspaceId }: CreateDocumentBody,
+    ): Promise<CreateDocumentResponse> {
+        const space = await resolveSpace(userId, workspaceId);
+        const ids = conversationIds.map(BigInt);
 
-    // 이 공간의 대화가 아닌 것(다른 회원·다른 팀·다른 공간의 대화), 삭제한 대화, 없는 대화가 하나라도 있으면 404
-    const conversations = await conversationRepository.findActiveByIds(spaceFilter(userId, space), ids);
-    if (conversations.length !== ids.length) {
-      const found = new Set(conversations.map((conversation) => Number(conversation.conversationId)));
-      throw new AppError("CONVERSATION_NOT_FOUND", {
-        details: { conversationIds: conversationIds.filter((id) => !found.has(id)) },
-      });
-    }
+        // 이 공간의 대화가 아닌 것(다른 회원·다른 팀·다른 공간의 대화), 삭제한 대화, 없는 대화가 하나라도 있으면 404
+        const conversations = await conversationRepository.findActiveByIds(spaceFilter(userId, space), ids);
+        if (conversations.length !== ids.length) {
+            const found = new Set(conversations.map((conversation) => Number(conversation.conversationId)));
+            throw new AppError("CONVERSATION_NOT_FOUND", {
+                details: { conversationIds: conversationIds.filter((id) => !found.has(id)) },
+            });
+        }
 
-    // 수집이 끝나지 않은(수집 중·실패) 대화가 섞여 있으면 409
-    const notCollected = conversations.filter((conversation) => conversation.status !== "COLLECTED");
-    if (notCollected.length > 0) {
-      throw new AppError("CONVERSATION_NOT_COLLECTED", {
-        details: { conversationIds: notCollected.map((conversation) => Number(conversation.conversationId)) },
-      });
-    }
+        // 수집이 끝나지 않은(수집 중·실패) 대화가 섞여 있으면 409
+        const notCollected = conversations.filter((conversation) => conversation.status !== "COLLECTED");
+        if (notCollected.length > 0) {
+            throw new AppError("CONVERSATION_NOT_COLLECTED", {
+                details: { conversationIds: notCollected.map((conversation) => Number(conversation.conversationId)) },
+            });
+        }
 
-    // 고른 대화로 보낼 요청을 만들고 크기를 확인한다 (너무 길면 400 INPUT_TOO_LARGE)
-    // 대화 순서는 고른 순서가 아니라 아이디 순으로 맞춘다 (같은 대화 묶음이면 같은 요청이 되게)
-    const input = toAnalysisInput([...conversations].sort((a, b) => (a.conversationId < b.conversationId ? -1 : 1)));
+        // 고른 대화로 보낼 요청을 만들고 크기를 확인한다 (너무 길면 400 INPUT_TOO_LARGE)
+        // 대화 순서는 고른 순서가 아니라 아이디 순으로 맞춘다 (같은 대화 묶음이면 같은 요청이 되게)
+        const input = toAnalysisInput(
+            [...conversations].sort((a, b) => (a.conversationId < b.conversationId ? -1 : 1)),
+        );
 
-    // 이미 생성·AI 보완이 진행 중인 대화가 섞여 있으면 409
-    await ensureNotInUse(ids);
+        // 이미 생성·AI 보완이 진행 중인 대화가 섞여 있으면 409
+        await ensureNotInUse(ids);
 
-    const generation = await generationRepository.create(BigInt(userId), space, ids);
+        const generation = await generationRepository.create(BigInt(userId), space, ids);
 
-    // await 하지 않는다: AI 서버가 느리거나 죽어 있어도 사용자는 기다리지 않는다
-    void sendGenerationRequest(generation, input);
+        // await 하지 않는다: AI 서버가 느리거나 죽어 있어도 사용자는 기다리지 않는다
+        void sendGenerationRequest(generation, input);
 
-    return { generationId: Number(generation.generationId), status: "GENERATING" };
-  },
+        return { generationId: Number(generation.generationId), status: "GENERATING" };
+    },
 
-  // 지식 문서 목록(A06). 최종 채택한 문서만 주고, 검토 중인 초안은 미채택 문서 목록(DRAFT-08)에서 본다
-  async list(userId: number, { page, limit, q, category, sort, workspaceId }: ListDocumentsQuery): Promise<ListDocumentsResponse> {
-    const space = await resolveSpace(userId, workspaceId);
-    const [documents, totalCount] = await documentRepository.findFinalizedPage(
-      spaceFilter(userId, space),
-      { q, category, sort },
-      { skip: (page - 1) * limit, take: limit },
-    );
-    return {
-      ...toPageInfo(page, limit, totalCount),
-      documents: documents.map(({ documentId, keywords, user, lastEditor, ...document }) => ({
-        ...document,
-        documentId: Number(documentId),
-        keywords: keywords.map(({ keyword }) => keyword),
-        requester: toUserRef(user),
-        lastEditor: toUserRef(lastEditor),
-      })),
-    };
-  },
-
-  // 지식 문서 상세(A07). 최종 채택한 문서만 보여 주고, 검토 중·생성 중·실패 문서와 볼 수 없는(다른 회원·내가 팀원이 아닌 팀)·삭제한 문서는 404
-  // 연결된 대화가 삭제됐으면 deleted: true로 알려 주고, 문서는 계속 열람·수정할 수 있다
-  async get(userId: number, documentId: number): Promise<DocumentDetail> {
-    const document = await documentRepository.findByIdWithDetail(BigInt(documentId));
-    if (!document || document.deletedAt || document.status !== "FINALIZED" || !(await getAccess(userId, document))) {
-      throw new AppError("DOCUMENT_NOT_FOUND");
-    }
-
-    return {
-      documentId: Number(document.documentId),
-      title: document.title,
-      content: document.content,
-      summary: document.summary,
-      category: document.category,
-      keywords: document.keywords.map(({ keyword }) => keyword),
-      requester: toUserRef(document.user),
-      lastEditor: toUserRef(document.lastEditor),
-      conversations: document.sources.map(({ conversation }) => ({
-        conversationId: Number(conversation.conversationId),
-        title: conversation.title,
-        deleted: conversation.deletedAt !== null,
-      })),
-      createdAt: document.createdAt,
-      updatedAt: document.updatedAt,
-    };
-  },
-
-  // 지식 문서 직접 수정(A07-1). 볼 수 없는·삭제한 문서는 404, 최종 채택 전 문서는 409(초안은 A05에서 수정)
-  // 최종 문서는 팀원 누구나 수정할 수 있다 (권한 표)
-  async update(userId: number, documentId: number, { title, content, keywords }: UpdateDocumentBody): Promise<UpdateDocumentResponse> {
-    const document = await documentRepository.findState(BigInt(documentId));
-    if (!document || document.deletedAt || !(await getAccess(userId, document))) throw new AppError("DOCUMENT_NOT_FOUND");
-    if (document.status !== "FINALIZED") throw new AppError("DOCUMENT_NOT_FINALIZED");
-
-    // 키워드 중복은 처음 나온 것만 남긴다 (DB가 대소문자를 구분하지 않으므로 같은 기준으로)
-    const seen = new Set<string>();
-    const uniqueKeywords = keywords?.filter((keyword) => {
-      const key = keyword.toLowerCase();
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-
-    const updated = await documentRepository.updateFinalized(BigInt(documentId), BigInt(userId), { title, content, keywords: uniqueKeywords });
-    // 확인한 뒤 저장하기 전에 삭제된 경우
-    if (!updated) throw new AppError("DOCUMENT_NOT_FOUND");
-
-    return {
-      documentId: Number(updated.documentId),
-      title: updated.title,
-      keywords: updated.keywords.map(({ keyword }) => keyword),
-      updatedAt: updated.updatedAt,
-    };
-  },
-
-  // 문서 삭제(A07 ⑤·A05, 확인 팝업 P03): 휴지통으로 옮긴다. 최종 문서와 미채택 문서(검토 중·생성 실패) 모두 지울 수 있다.
-  // 볼 수 없는·이미 삭제한 문서는 404, 첫 초안 생성 중이거나 AI 보완 중이면 409. 연결된 원본 대화는 지우지 않는다
-  // 팀: 최종 문서는 소유자·관리자만, 미채택 문서는 소유자·관리자 + 최초 생성 요청자 (아니면 403)
-  async delete(userId: number, documentId: number): Promise<void> {
-    const document = await documentRepository.findState(BigInt(documentId));
-    const access = document && !document.deletedAt ? await getAccess(userId, document) : null;
-    if (!document || !access) throw new AppError("DOCUMENT_NOT_FOUND");
-    if (!canDeleteDocument(access, document.status === "FINALIZED")) throw new AppError("FORBIDDEN");
-    if (document.status === "GENERATING" || document.drafts.length > 0) throw new AppError("INVALID_DRAFT_STATUS");
-
-    if (!(await documentRepository.moveToTrash(BigInt(documentId), BigInt(userId)))) {
-      // 확인한 뒤 그 사이에 이미 삭제됐거나(삭제 버튼을 두 번 누름 등) 생성이 시작된 경우
-      const latest = await documentRepository.findState(BigInt(documentId));
-      throw new AppError(!latest || latest.deletedAt ? "DOCUMENT_NOT_FOUND" : "INVALID_DRAFT_STATUS");
-    }
-  },
-
-  // 휴지통 목록(사이드바 "삭제한 문서"). 공간은 지식 문서 목록과 같은 기준이고, 문서마다 내가 복원·영구 삭제할 수 있는지(canRestore)를 준다
-  async listTrash(userId: number, { page, limit, workspaceId }: ListTrashQuery): Promise<ListTrashResponse> {
-    // 팀이면 내 역할로 문서별 권한을 계산한다 (개인 공간은 전부 내 문서라 항상 가능)
-    const manager = workspaceId === undefined ? true : (await findMembership(userId, workspaceId)).role !== "MEMBER";
-    const space = workspaceId === undefined ? null : BigInt(workspaceId);
-    const [documents, totalCount] = await documentRepository.findTrashPage(spaceFilter(userId, space), {
-      skip: (page - 1) * limit,
-      take: limit,
-    });
-    return {
-      ...toPageInfo(page, limit, totalCount),
-      documents: documents.map((document) => {
-        const access: Access = { manager, mine: document.userId === BigInt(userId) };
-        const finalized = document.status === "FINALIZED";
+    // 지식 문서 목록(A06). 최종 채택한 문서만 주고, 검토 중인 초안은 미채택 문서 목록(DRAFT-08)에서 본다
+    async list(
+        userId: number,
+        { page, limit, category, sort, workspaceId }: ListDocumentsQuery,
+    ): Promise<ListDocumentsResponse> {
+        const space = await resolveSpace(userId, workspaceId);
+        const [documents, totalCount] = await documentRepository.findFinalizedPage(
+            spaceFilter(userId, space),
+            { category, sort },
+            { skip: (page - 1) * limit, take: limit },
+        );
         return {
-          documentId: Number(document.documentId),
-          // 미채택 문서는 문서 제목이 없어서 생성이 끝난 최신 회차의 제목 (생성 실패 문서는 null)
-          title: finalized ? document.title : (document.drafts[0]?.title ?? null),
-          status: document.status as "DRAFT_GENERATED" | "FAILED" | "FINALIZED",
-          category: document.category,
-          requester: toUserRef(document.user),
-          deletedBy: toUserRef(document.deleter),
-          deletedAt: document.deletedAt as Date,
-          canRestore: canDeleteDocument(access, finalized),
+            ...toPageInfo(page, limit, totalCount),
+            documents: documents.map(({ documentId, keywords, user, lastEditor, ...document }) => ({
+                ...document,
+                documentId: Number(documentId),
+                keywords: keywords.map(({ keyword }) => keyword),
+                requester: toUserRef(user),
+                lastEditor: toUserRef(lastEditor),
+            })),
         };
-      }),
-    };
-  },
+    },
 
-  // 휴지통에서 복원. 권한은 삭제와 같다. 휴지통에 없는 문서(삭제 안 함·이미 복원·영구 삭제)나 볼 수 없는 문서는 404
-  async restore(userId: number, documentId: number): Promise<RestoreDocumentResponse> {
-    const document = await requireTrashManager(userId, documentId);
-    if (!(await documentRepository.restoreFromTrash(BigInt(documentId)))) throw new AppError("DOCUMENT_NOT_FOUND");
-    return { documentId, status: document.status as RestoreDocumentResponse["status"] };
-  },
+    // 지식 문서 상세(A07). 최종 채택한 문서만 보여 주고, 검토 중·생성 중·실패 문서와 볼 수 없는(다른 회원·내가 팀원이 아닌 팀)·삭제한 문서는 404
+    // 연결된 대화가 삭제됐으면 deleted: true로 알려 주고, 문서는 계속 열람·수정할 수 있다
+    async get(userId: number, documentId: number): Promise<DocumentDetail> {
+        const document = await documentRepository.findByIdWithDetail(BigInt(documentId));
+        if (
+            !document ||
+            document.deletedAt ||
+            document.status !== "FINALIZED" ||
+            !(await getAccess(userId, document))
+        ) {
+            throw new AppError("DOCUMENT_NOT_FOUND");
+        }
 
-  // 휴지통에서 영구 삭제 (복구 불가). 권한은 복원과 같다
-  async deletePermanently(userId: number, documentId: number): Promise<void> {
-    await requireTrashManager(userId, documentId);
-    if (!(await documentRepository.deletePermanently(BigInt(documentId)))) throw new AppError("DOCUMENT_NOT_FOUND");
-  },
+        return {
+            documentId: Number(document.documentId),
+            title: document.title,
+            content: document.content,
+            summary: document.summary,
+            category: document.category,
+            keywords: document.keywords.map(({ keyword }) => keyword),
+            requester: toUserRef(document.user),
+            lastEditor: toUserRef(document.lastEditor),
+            conversations: document.sources.map(({ conversation }) => ({
+                conversationId: Number(conversation.conversationId),
+                title: conversation.title,
+                deleted: conversation.deletedAt !== null,
+            })),
+            createdAt: document.createdAt,
+            updatedAt: document.updatedAt,
+        };
+    },
 
-  // 한 문서의 초안 회차 목록 (본문 제외). 초안 검토 화면의 회차 선택에 쓴다. 볼 수 없는·삭제한 문서는 404
-  async listDrafts(userId: number, documentId: number): Promise<DraftHistoryResponse> {
-    const document = await documentRepository.findWithDraftHistory(BigInt(documentId));
-    if (!document || document.deletedAt || !(await getAccess(userId, document))) {
-      throw new AppError("DOCUMENT_NOT_FOUND");
-    }
+    // 지식 문서 직접 수정(A07-1). 볼 수 없는·삭제한 문서는 404, 최종 채택 전 문서는 409(초안은 A05에서 수정)
+    // 최종 문서는 팀원 누구나 수정할 수 있다 (권한 표)
+    async update(
+        userId: number,
+        documentId: number,
+        { title, content, keywords }: UpdateDocumentBody,
+    ): Promise<UpdateDocumentResponse> {
+        const document = await documentRepository.findState(BigInt(documentId));
+        if (!document || document.deletedAt || !(await getAccess(userId, document)))
+            throw new AppError("DOCUMENT_NOT_FOUND");
+        if (document.status !== "FINALIZED") throw new AppError("DOCUMENT_NOT_FINALIZED");
 
-    // 초안은 오름차순이라 뒤집어서 최신부터 찾는다
-    const latestFirst = [...document.drafts].reverse();
-    const shown = latestFirst.find((draft) => draft.status === "ACCEPTED") ?? latestFirst.find((draft) => draft.status === "GENERATED");
-    // 가장 최근 초안이 AI 보완(2회차 이상)이고 생성 중·실패면 보완 상태로 알려 준다. 채택한 문서는 검토가 끝나서 뺀다
-    // (다음 회차는 이전 회차가 완성돼야 생기므로 회차·시도 순으로 마지막 초안이 가장 최근 초안)
-    const newest = latestFirst[0];
-    const revision =
-      document.status !== "FINALIZED" && newest && newest.versionNo > 1 && (newest.status === "GENERATING" || newest.status === "FAILED")
-        ? { draftId: Number(newest.draftId), status: newest.status }
-        : null;
+        // 키워드 중복은 처음 나온 것만 남긴다 (DB가 대소문자를 구분하지 않으므로 같은 기준으로)
+        const seen = new Set<string>();
+        const uniqueKeywords = keywords?.filter((keyword) => {
+            const key = keyword.toLowerCase();
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+        });
 
-    return {
-      latestDraftId: shown ? Number(shown.draftId) : null,
-      revision,
-      // 회차 선택에는 생성이 끝난 회차만 (한 회차에 성공한 초안은 하나뿐)
-      drafts: document.drafts
-        .filter((draft) => draft.status === "GENERATED" || draft.status === "ACCEPTED")
-        .map((draft) => ({ draftId: Number(draft.draftId), versionNo: draft.versionNo })),
-    };
-  },
+        const updated = await documentRepository.updateFinalized(BigInt(documentId), BigInt(userId), {
+            title,
+            content,
+            keywords: uniqueKeywords,
+        });
+        // 확인한 뒤 저장하기 전에 삭제된 경우
+        if (!updated) throw new AppError("DOCUMENT_NOT_FOUND");
+        // AI 검색 색인에 바뀐 내용을 반영한다 (뒤에서)
+        void touchSearchIndex([updated.documentId]);
 
-  // 검토할 초안이 있는 문서 목록. 원문 대화의 삭제 여부와 관계없이 보여 준다(삭제한 문서만 뺌)
-  // 2026-11-15: 같은 입력에서 나온 문서끼리 묶을 수 있게 generationId를, 목록에 요약을 보여 줄 수 있게 summary를 준다.
-  // 아직 문서가 없는 생성 요청(생성 중, 최근 7일 안의 실패·문서 없음)은 generations에 카드로 준다
-  async listPending(userId: number, { workspaceId }: ListPendingDocumentsQuery): Promise<PendingDocumentsResponse> {
-    const space = await resolveSpace(userId, workspaceId);
-    const filter = spaceFilter(userId, space);
-    const [documents, generations] = await Promise.all([
-      documentRepository.findPendingBySpace(filter),
-      generationRepository.findRecentBySpace(filter),
-    ]);
-    return {
-      // DRAFT_GENERATED 문서에는 생성이 끝난 회차가 항상 하나 이상 있다
-      documents: documents.map(({ documentId, generationId, createdAt, user, drafts: [latest] }) => ({
-        documentId: Number(documentId),
-        generationId: generationId === null ? null : Number(generationId),
-        title: latest.title,
-        summary: latest.summary,
-        requester: toUserRef(user),
-        createdAt,
-      })),
-      generations: toGenerationCards(generations),
-    };
-  },
+        return {
+            documentId: Number(updated.documentId),
+            title: updated.title,
+            keywords: updated.keywords.map(({ keyword }) => keyword),
+            updatedAt: updated.updatedAt,
+        };
+    },
+
+    // 문서 삭제(A07 ⑤·A05, 확인 팝업 P03): 휴지통으로 옮긴다. 최종 문서와 미채택 문서(검토 중·생성 실패) 모두 지울 수 있다.
+    // 볼 수 없는·이미 삭제한 문서는 404, 첫 초안 생성 중이거나 AI 보완 중이면 409. 연결된 원본 대화는 지우지 않는다
+    // 팀: 최종 문서는 소유자·관리자만, 미채택 문서는 소유자·관리자 + 최초 생성 요청자 (아니면 403)
+    async delete(userId: number, documentId: number): Promise<void> {
+        const document = await documentRepository.findState(BigInt(documentId));
+        const access = document && !document.deletedAt ? await getAccess(userId, document) : null;
+        if (!document || !access) throw new AppError("DOCUMENT_NOT_FOUND");
+        if (!canDeleteDocument(access, document.status === "FINALIZED")) throw new AppError("FORBIDDEN");
+        if (document.status === "GENERATING" || document.drafts.length > 0) throw new AppError("INVALID_DRAFT_STATUS");
+
+        if (!(await documentRepository.moveToTrash(BigInt(documentId), BigInt(userId)))) {
+            // 확인한 뒤 그 사이에 이미 삭제됐거나(삭제 버튼을 두 번 누름 등) 생성이 시작된 경우
+            const latest = await documentRepository.findState(BigInt(documentId));
+            throw new AppError(!latest || latest.deletedAt ? "DOCUMENT_NOT_FOUND" : "INVALID_DRAFT_STATUS");
+        }
+        // 최종 문서였다면 AI 검색 대상에서 빠진다 (뒤에서)
+        void touchSearchIndex([BigInt(documentId)]);
+    },
+
+    // 휴지통 목록(사이드바 "삭제한 문서"). 공간은 지식 문서 목록과 같은 기준이고, 문서마다 내가 복원·영구 삭제할 수 있는지(canRestore)를 준다
+    async listTrash(userId: number, { page, limit, workspaceId }: ListTrashQuery): Promise<ListTrashResponse> {
+        // 팀이면 내 역할로 문서별 권한을 계산한다 (개인 공간은 전부 내 문서라 항상 가능)
+        const manager =
+            workspaceId === undefined ? true : (await findMembership(userId, workspaceId)).role !== "MEMBER";
+        const space = workspaceId === undefined ? null : BigInt(workspaceId);
+        const [documents, totalCount] = await documentRepository.findTrashPage(spaceFilter(userId, space), {
+            skip: (page - 1) * limit,
+            take: limit,
+        });
+        return {
+            ...toPageInfo(page, limit, totalCount),
+            documents: documents.map((document) => {
+                const access: Access = { manager, mine: document.userId === BigInt(userId) };
+                const finalized = document.status === "FINALIZED";
+                return {
+                    documentId: Number(document.documentId),
+                    // 미채택 문서는 문서 제목이 없어서 생성이 끝난 최신 회차의 제목 (생성 실패 문서는 null)
+                    title: finalized ? document.title : (document.drafts[0]?.title ?? null),
+                    status: document.status as "DRAFT_GENERATED" | "FAILED" | "FINALIZED",
+                    category: document.category,
+                    requester: toUserRef(document.user),
+                    deletedBy: toUserRef(document.deleter),
+                    deletedAt: document.deletedAt as Date,
+                    canRestore: canDeleteDocument(access, finalized),
+                };
+            }),
+        };
+    },
+
+    // 휴지통에서 복원. 권한은 삭제와 같다. 휴지통에 없는 문서(삭제 안 함·이미 복원·영구 삭제)나 볼 수 없는 문서는 404
+    async restore(userId: number, documentId: number): Promise<RestoreDocumentResponse> {
+        const document = await requireTrashManager(userId, documentId);
+        if (!(await documentRepository.restoreFromTrash(BigInt(documentId)))) throw new AppError("DOCUMENT_NOT_FOUND");
+        // 최종 문서면 다시 AI 검색 대상이 된다 (뒤에서)
+        void touchSearchIndex([BigInt(documentId)]);
+        return { documentId, status: document.status as RestoreDocumentResponse["status"] };
+    },
+
+    // 휴지통에서 영구 삭제 (복구 불가). 권한은 복원과 같다
+    async deletePermanently(userId: number, documentId: number): Promise<void> {
+        await requireTrashManager(userId, documentId);
+        if (!(await documentRepository.deletePermanently(BigInt(documentId)))) throw new AppError("DOCUMENT_NOT_FOUND");
+    },
+
+    // 한 문서의 초안 회차 목록 (본문 제외). 초안 검토 화면의 회차 선택에 쓴다. 볼 수 없는·삭제한 문서는 404
+    async listDrafts(userId: number, documentId: number): Promise<DraftHistoryResponse> {
+        const document = await documentRepository.findWithDraftHistory(BigInt(documentId));
+        if (!document || document.deletedAt || !(await getAccess(userId, document))) {
+            throw new AppError("DOCUMENT_NOT_FOUND");
+        }
+
+        // 초안은 오름차순이라 뒤집어서 최신부터 찾는다
+        const latestFirst = [...document.drafts].reverse();
+        const shown =
+            latestFirst.find((draft) => draft.status === "ACCEPTED") ??
+            latestFirst.find((draft) => draft.status === "GENERATED");
+        // 가장 최근 초안이 AI 보완(2회차 이상)이고 생성 중·실패면 보완 상태로 알려 준다. 채택한 문서는 검토가 끝나서 뺀다
+        // (다음 회차는 이전 회차가 완성돼야 생기므로 회차·시도 순으로 마지막 초안이 가장 최근 초안)
+        const newest = latestFirst[0];
+        const revision =
+            document.status !== "FINALIZED" &&
+            newest &&
+            newest.versionNo > 1 &&
+            (newest.status === "GENERATING" || newest.status === "FAILED")
+                ? { draftId: Number(newest.draftId), status: newest.status }
+                : null;
+
+        return {
+            latestDraftId: shown ? Number(shown.draftId) : null,
+            revision,
+            // 회차 선택에는 생성이 끝난 회차만 (한 회차에 성공한 초안은 하나뿐)
+            drafts: document.drafts
+                .filter((draft) => draft.status === "GENERATED" || draft.status === "ACCEPTED")
+                .map((draft) => ({ draftId: Number(draft.draftId), versionNo: draft.versionNo })),
+        };
+    },
+
+    // 검토할 초안이 있는 문서 목록. 원문 대화의 삭제 여부와 관계없이 보여 준다(삭제한 문서만 뺌)
+    // 2026-11-15: 같은 입력에서 나온 문서끼리 묶을 수 있게 generationId를, 목록에 요약을 보여 줄 수 있게 summary를 준다.
+    // 아직 문서가 없는 생성 요청(생성 중, 최근 7일 안의 실패·문서 없음)은 generations에 카드로 준다
+    async listPending(userId: number, { workspaceId }: ListPendingDocumentsQuery): Promise<PendingDocumentsResponse> {
+        const space = await resolveSpace(userId, workspaceId);
+        const filter = spaceFilter(userId, space);
+        const [documents, generations] = await Promise.all([
+            documentRepository.findPendingBySpace(filter),
+            generationRepository.findRecentBySpace(filter),
+        ]);
+        return {
+            // DRAFT_GENERATED 문서에는 생성이 끝난 회차가 항상 하나 이상 있다
+            documents: documents.map(({ documentId, generationId, createdAt, user, drafts: [latest] }) => ({
+                documentId: Number(documentId),
+                generationId: generationId === null ? null : Number(generationId),
+                title: latest.title,
+                summary: latest.summary,
+                requester: toUserRef(user),
+                createdAt,
+            })),
+            generations: toGenerationCards(generations),
+        };
+    },
 };

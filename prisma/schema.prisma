@@ -1,5 +1,20 @@
 // =====================================================================
 // 생성형 AI 대화기록 기반 개인 기록 자산화 서비스 - ERD v3 (Prisma 7 / MySQL 8.0)
+// 기준: 다현 ERD 초안(2026-09-29, 10테이블) + 2026-10-03 수정사항 + 2026-10-16 설계서 5장(화면설계) 반영
+//  - 2026-11-12 AI 연동 변경: AI 서버가 GPT에 전처리부터 초안 작성까지 맡기고 결과를 HTTP 응답으로 돌려줌 (콜백 없음, documents.prompt 삭제)
+//  - 수정본(재생성): AI 서버가 직접 GPT를 호출하고 결과 JSON(제목·유형·요약·키워드·본문)을 돌려줌
+//  - 관리자 웹: users.role로 관리자 구분, 지표는 기존 테이블 집계 (생성 시도 1번 = drafts 1행)
+//  - 폴더·다운로드는 구현하지 않음 (다현 결정 2026-10-16)
+//  - 2026-11-13 휴지통(documents.deleted_at·deleted_by)과 저장 이력(document_versions) 다시 추가 (다현 결정)
+//  - 2026-11-11 대화 입력을 JSON 업로드(S3)에서 ChatGPT 공유 링크 수집(DB 저장)으로 변경: conversations 컬럼 변경, conversation_messages 추가
+//  - 2026-11-12 팀(공유) 워크스페이스 추가: workspaces, workspace_members, workspace_invitations
+//    대화·문서에 workspace_id (NULL이면 개인 워크스페이스). 초안은 문서를 따라감. 개인 자료는 팀으로 복사하지 않음
+//  - 2026-11-11 NOT_KNOWLEDGE(지식 유형 아님 → 대화 정리본) 기능 삭제: DocumentStatus·DraftStatus 값, conversations.refined_at 삭제
+//  - 대화(conversations) 목록/열람/삭제, 분석 대상 선택(document_conversations), 초안 직접 수정(덮어쓰기)
+//  - 2026-11-15 지식 분할 저장(AI v2 /v2/analyses): 생성 요청 1번에서 지식 문서가 여러 편 나온다
+//    generations(생성 요청)·generation_conversations 추가, documents.generation_id, drafts.ai_artifact_id·ai_detail,
+//    conversation_messages.code_blocks (수집 모듈이 뽑은 코드 블록을 AI에 넘김)
+//  - 2026-11-17 지식 문서 검색을 AI 서버 검색(knowledge_search)으로 바꾸면서 documents FULLTEXT 인덱스 삭제 (테이블 변경 없음)
 // 규칙
 //  - 테이블/컬럼명은 DB에서 snake_case(@@map/@map), 코드에서는 camelCase
 //  - 모든 PK는 <테이블 단수>_id BIGINT UNSIGNED AUTO_INCREMENT
@@ -188,9 +203,7 @@ model Document {
   @@index([createdAt], map: "idx_documents_created") // 관리자 지표: 기간별 문서 생성 수
   @@index([finalizedAt], map: "idx_documents_finalized") // 관리자 지표: 최종 채택일 기준 집계
   @@index([generationId], map: "idx_documents_generation") // 생성 요청 결과(GEN-01)
-  // 한글 검색용 FULLTEXT. Prisma 스키마로는 ngram 파서를 지정할 수 없어서
-  // 마이그레이션 SQL에서 WITH PARSER ngram을 직접 붙임 (ERD.md 참고)
-  @@fulltext([title, content], map: "ftx_documents_search")
+  // 2026-11-17 제목·본문 FULLTEXT 검색 삭제 (AI 검색 SEARCH-01~03으로 대체, ftx_documents_search 인덱스 삭제)
   @@map("documents")
 }
 

@@ -2,6 +2,7 @@
 .venv
 ai_data
 tests
+tests_search
 examples
 **/__pycache__
 *.pyc
