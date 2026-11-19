@@ -108,7 +108,7 @@ export const ERRORS = {
         no: 3001,
         title: "공유 링크 형식 오류",
         status: 400,
-        message: "https://chatgpt.com/share/... 형태의 공유 링크를 입력해 주세요.",
+        message: "ChatGPT·Gemini·Claude에서 복사한 공유 링크를 입력해 주세요.",
     },
     CONVERSATION_NOT_COLLECTED: {
         no: 3003,

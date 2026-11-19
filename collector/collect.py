@@ -1,17 +1,23 @@
 """백엔드(Node)가 child_process로 실행하는 진입점.
 
 사용: python collect.py <공유 URL>
+      python collect.py --diag <공유 URL>   (화면 구조 진단만, 저장·출력 형식 무관)
 결과는 stdout에 JSON 한 줄로만 쓴다 (Playwright 로그 등은 stderr).
-  성공: {"ok": true, "captureId": "share_...", "title": "...", "messages": [{"sourceMessageId", "role", "content", "codeBlocks"}]}
+  성공: {"ok": true, "captureId": "share_...", "title": "...", "resolvedUrl": "최종 공유 주소",
+         "messages": [{"sourceMessageId", "role", "content", "codeBlocks"}]}
   실패: {"ok": false, "code": "NOT_ACCESSIBLE|UNSUPPORTED_CONTENT|TIMEOUT|COLLECT_ERROR|INVALID_URL", "message": "..."}
 종료 코드: 성공 0, 실패 1.
 수집 모듈(shared_importer.py, share_input.py)은 고치지 않고 그대로 쓴다.
+주소별 수집 (2026-11-18):
+  - https://chatgpt.com/share/{UUID}, https://chat.openai.com/share/{UUID} → 손요한의 shared_importer (chat.openai.com은 chatgpt.com으로 열기)
+  - 그 밖의 지원 주소(ChatGPT /s/, Gemini, Claude) → providers.py (백엔드가 만든 수집기)
 """
 import asyncio
 import json
 import sys
 
 from shared_importer import import_shared_conversation
+from providers import UUID_RE, collect_other_share, diagnose, parse_share_url
 
 TITLE_MAX = 255
 
@@ -43,7 +49,7 @@ def classify(exc):
 
 
 def clean_title(title):
-    title = (title or '').strip()
+    title = (title or '').replace('\u200e', '').strip()
     if title.startswith('ChatGPT - '):
         title = title[len('ChatGPT - '):].strip()
     return title[:TITLE_MAX] or None
@@ -54,6 +60,7 @@ def to_output(record):
         'ok': True,
         'captureId': record['capture_id'],  # 링크+대화 내용 해시. 내용이 추가되면 달라진다
         'title': clean_title(record['conversation']['title']),
+        'resolvedUrl': record.get('source_url'),  # 리디렉션 뒤 최종 공유 주소 (중복 판단 기준)
         # 추천 질문을 뺀 content만 쓴다 (content_raw는 저장하지 않음)
         # codeBlocks: 수집 모듈이 뽑은 발화별 코드 블록. 코드는 content에도 들어 있지만, AI 서버가 코드 경계를 알 수 있게 따로 넘긴다
         # (빈 문자열은 빼고, 코드가 없으면 빈 배열)
@@ -74,12 +81,26 @@ def write(payload):
     sys.stdout.flush()
 
 
+async def collect(url):
+    """주소에 맞는 수집기로 보낸다."""
+    parsed = parse_share_url(url)
+    if not parsed:
+        raise ValueError('지원하지 않는 공유 링크 형식입니다.')
+    provider, kind, share_id, _ = parsed
+    if provider == 'chatgpt' and kind == 'share' and UUID_RE.match(share_id):
+        return await import_shared_conversation(f'https://chatgpt.com/share/{share_id.lower()}')
+    return await collect_other_share(url)
+
+
 def main(argv):
+    if len(argv) == 3 and argv[1] == '--diag':
+        print(json.dumps(asyncio.run(diagnose(argv[2])), ensure_ascii=False, indent=2))
+        return 0
     if len(argv) != 2:
         write({'ok': False, 'code': 'INVALID_URL', 'message': '사용법: python collect.py <공유 URL>'})
         return 1
     try:
-        record = asyncio.run(import_shared_conversation(argv[1]))
+        record = asyncio.run(collect(argv[1]))
     except Exception as exc:  # 어떤 오류든 JSON으로 알려 준다 (원문 메시지는 Node가 로그에만 남김)
         write({'ok': False, 'code': classify(exc), 'message': f'{type(exc).__name__}: {exc}'[:1000]})
         return 1
