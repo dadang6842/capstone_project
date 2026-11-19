@@ -53,18 +53,18 @@ function nicknameFromGoogle({ name, email }: GoogleProfile) {
     return Array.from(base).slice(0, NICKNAME_MAX).join("").trim() || "사용자";
 }
 
-// 구글 계정에 해당하는 회원을 찾는다. 없으면 null (새로 만들지는 않음)
-//  1) 이미 연결된 회원(google_sub)이 있으면 그 회원
-//  2) 같은 이메일로 가입한 회원이 있으면 구글을 자동 연결 (다현 결정 2026-11-17. 구글이 인증한 이메일만 받는다)
-//     그 회원에 이미 다른 구글 계정이 연결돼 있으면 409 GOOGLE_ACCOUNT_MISMATCH
-async function findOrLinkGoogleUser(google: GoogleProfile): Promise<User | null> {
-    const linked = await userRepository.findByGoogleSub(google.sub);
-    if (linked) return linked;
+// 같은 이메일로 이미 가입한 계정이 있을 때. 이메일만 보고 자동으로 합치지 않는다 (다현 결정 2026-11-19)
+// 그 계정으로 로그인한 뒤 계정 정보(A08)에서 구글을 연결해야 한다
+const EMAIL_REGISTERED_MESSAGE =
+    "이미 이 이메일로 가입한 계정이 있습니다. 이메일로 로그인한 뒤 계정 정보에서 구글 계정을 연결해 주세요.";
 
-    const sameEmail = await userRepository.findByEmail(google.email);
-    if (!sameEmail) return null;
-    if (sameEmail.googleSub) throw new AppError("GOOGLE_ACCOUNT_MISMATCH");
-    return userRepository.update(sameEmail.userId, { googleSub: google.sub });
+function createGoogleUser(google: GoogleProfile) {
+    return userRepository.create({
+        email: google.email,
+        password: null,
+        nickname: nicknameFromGoogle(google),
+        googleSub: google.sub,
+    });
 }
 
 export const authService = {
@@ -109,29 +109,25 @@ export const authService = {
         return issueTokens(restored);
     },
 
-    // 구글 로그인(AUTH-07): 연결된 회원 → 같은 이메일 회원 자동 연결 → 없으면 가입. 셋 다 같은 로그인 응답
+    // 구글 로그인(AUTH-07): 구글 계정(sub)이 연결된 회원이면 로그인, 처음 보는 구글 계정이면 가입
+    // 같은 이메일로 가입한 다른 계정이 있으면 합치지 않고 409 EMAIL_DUPLICATED
     async googleLogin({ idToken }: GoogleLoginBody): Promise<GoogleLoginResponse> {
         const google = await verifyGoogleIdToken(idToken);
 
-        let user = await findOrLinkGoogleUser(google);
+        let user = await userRepository.findByGoogleSub(google.sub);
         let isNewUser = false;
         if (!user) {
+            if (await userRepository.findByEmail(google.email)) {
+                throw new AppError("EMAIL_DUPLICATED", { message: EMAIL_REGISTERED_MESSAGE });
+            }
             try {
-                user = await userRepository.create({
-                    email: google.email,
-                    password: null,
-                    nickname: nicknameFromGoogle(google),
-                    googleSub: google.sub,
-                });
+                user = await createGoogleUser(google);
                 isNewUser = true;
             } catch (err) {
+                if (!(err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002")) throw err;
                 // 같은 구글 계정으로 동시에 눌러서 다른 요청이 먼저 만들었으면 그 회원으로 로그인
-                if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
-                    user = await findOrLinkGoogleUser(google);
-                    if (!user) throw new AppError("EMAIL_DUPLICATED");
-                } else {
-                    throw err;
-                }
+                user = await userRepository.findByGoogleSub(google.sub);
+                if (!user) throw new AppError("EMAIL_DUPLICATED", { message: EMAIL_REGISTERED_MESSAGE });
             }
         }
 
@@ -144,9 +140,10 @@ export const authService = {
     },
 
     // 구글 계정 탈퇴 취소(AUTH-08): AUTH-07에서 403 WITHDRAWAL_PENDING을 받은 뒤 같은 구글 ID 토큰으로 호출
+    // 이 구글 계정이 연결된 회원만 찾는다 (이메일로 찾지 않음)
     async cancelWithdrawalWithGoogle({ idToken }: GoogleLoginBody): Promise<LoginResponse> {
         const google = await verifyGoogleIdToken(idToken);
-        const user = await findOrLinkGoogleUser(google);
+        const user = await userRepository.findByGoogleSub(google.sub);
         if (!user?.deletedAt) throw new AppError("WITHDRAWAL_NOT_REQUESTED");
 
         const restored = await userRepository.update(user.userId, { deletedAt: null });
