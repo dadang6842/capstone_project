@@ -1,16 +1,16 @@
 import { Router } from "express";
 import { authenticate } from "../middlewares/authenticate.js";
+import { validate } from "../middlewares/validate.js";
 import { userController } from "../controllers/user.controller.js";
 import { userSchema, tokenResponseSchema } from "../schemas/auth.schema.js";
-import { successResponse } from "../schemas/common.schema.js";
-import { registry, errorResponses, bearerAuth } from "../docs/openapi.js";
-import { validate } from "../middlewares/validate.js";
 import {
     updateNicknameBodySchema,
     changePasswordBodySchema,
     withdrawBodySchema,
     withdrawResponseSchema,
 } from "../schemas/user.schema.js";
+import { successResponse } from "../schemas/common.schema.js";
+import { registry, errorResponses, bearerAuth } from "../docs/openapi.js";
 
 const router = Router();
 
@@ -51,7 +51,7 @@ registry.registerPath({
     tags: ["User"],
     summary: "비밀번호 변경 (USER-03)",
     description:
-        "다른 기기의 로그인은 모두 끊고(refresh 토큰 전부 폐기), 지금 기기용 새 토큰을 준다. 프론트는 받은 토큰으로 바꿔 저장한다.",
+        "화면: A08 → P06. 다른 기기의 로그인은 모두 끊고(refresh 토큰 전부 폐기), 지금 기기용 새 토큰을 준다. 구글로만 가입한 계정(hasPassword false)은 409 PASSWORD_NOT_SET이라 프론트는 메뉴를 숨긴다.",
     security: bearerAuth,
     request: { body: { required: true, content: { "application/json": { schema: changePasswordBodySchema } } } },
     responses: {
@@ -59,7 +59,7 @@ registry.registerPath({
             description: "변경 성공, 새 토큰",
             content: { "application/json": { schema: successResponse(tokenResponseSchema) } },
         },
-        ...errorResponses("VALIDATION_ERROR", "INVALID_PASSWORD", "UNAUTHORIZED", "TOKEN_EXPIRED"),
+        ...errorResponses("VALIDATION_ERROR", "INVALID_PASSWORD", "PASSWORD_NOT_SET", "UNAUTHORIZED", "TOKEN_EXPIRED"),
     },
 });
 router.patch("/me/password", authenticate, validate({ body: changePasswordBodySchema }), userController.changePassword);
@@ -70,7 +70,7 @@ registry.registerPath({
     tags: ["User"],
     summary: "회원 탈퇴 (USER-04)",
     description:
-        "deleted_at을 채우고 모든 기기 로그인을 끊는다. 7일 안에 로그인하면 탈퇴 취소(AUTH-06) 가능. 프론트는 성공하면 토큰을 지우고 로그아웃 처리한다.",
+        "화면: A08 → P07 → A01. deleted_at을 채우고 모든 기기 로그인을 끊는다. 본인 확인은 password, 구글로만 가입한 계정(hasPassword false)은 구글 버튼으로 다시 받은 googleIdToken. 7일 안에 로그인하면 AUTH-06·AUTH-08로 취소 가능.",
     security: bearerAuth,
     request: { body: { required: true, content: { "application/json": { schema: withdrawBodySchema } } } },
     responses: {
@@ -78,7 +78,16 @@ registry.registerPath({
             description: "탈퇴 요청 완료",
             content: { "application/json": { schema: successResponse(withdrawResponseSchema) } },
         },
-        ...errorResponses("VALIDATION_ERROR", "INVALID_PASSWORD", "UNAUTHORIZED", "TOKEN_EXPIRED"),
+        ...errorResponses(
+            "VALIDATION_ERROR",
+            "INVALID_PASSWORD",
+            "UNAUTHORIZED",
+            "TOKEN_EXPIRED",
+            "INVALID_GOOGLE_TOKEN",
+            "PASSWORD_NOT_SET",
+            "GOOGLE_ACCOUNT_MISMATCH",
+            "GOOGLE_LOGIN_UNAVAILABLE",
+        ),
     },
 });
 router.delete("/me", authenticate, validate({ body: withdrawBodySchema }), userController.withdraw);
