@@ -9,6 +9,14 @@ import {
     withdrawBodySchema,
     withdrawResponseSchema,
 } from "../schemas/user.schema.js";
+import {
+    googleConnectionSchema,
+    googleLinkChallengeBodySchema,
+    googleLinkChallengeSchema,
+    googleLinkBodySchema,
+    googleUnlinkBodySchema,
+} from "../schemas/googleAccount.schema.js";
+import { googleAccountController } from "../controllers/googleAccount.controller.js";
 import { successResponse } from "../schemas/common.schema.js";
 import { registry, errorResponses, bearerAuth } from "../docs/openapi.js";
 
@@ -91,5 +99,117 @@ registry.registerPath({
     },
 });
 router.delete("/me", authenticate, validate({ body: withdrawBodySchema }), userController.withdraw);
+
+// 구글 계정 연동·해제 (2026-11-19). 계정 정보 A08의 구글 영역 (설계서 추가 기능, 프론트 v1.1.9 화면)
+registry.registerPath({
+    method: "get",
+    path: "/users/me/google",
+    tags: ["User"],
+    summary: "구글 연결 상태 조회 (USER-05)",
+    description:
+        "화면: A08 계정 정보의 구글 영역. 연결된 구글 계정의 이메일·이름·연결일과 해제 가능 여부를 준다. version은 해제(USER-08)의 expectedVersion으로 쓴다.",
+    security: bearerAuth,
+    responses: {
+        200: {
+            description: "연결 상태",
+            content: { "application/json": { schema: successResponse(googleConnectionSchema) } },
+        },
+        ...errorResponses("UNAUTHORIZED", "TOKEN_EXPIRED"),
+    },
+});
+router.get("/me/google", authenticate, googleAccountController.getConnection);
+
+registry.registerPath({
+    method: "post",
+    path: "/users/me/google/link-challenge",
+    tags: ["User"],
+    summary: "구글 연결 시작 (USER-06)",
+    description:
+        "화면: A08 '구글 연결' → 비밀번호 확인 팝업 → 구글 계정 선택. 비밀번호를 확인하고 2분짜리 연결 시도(challengeId·clientId·nonce)를 준다. 프론트는 clientId·nonce로 구글 버튼을 띄우고, 고른 계정의 credential을 USER-07로 보낸다.",
+    security: bearerAuth,
+    request: { body: { required: true, content: { "application/json": { schema: googleLinkChallengeBodySchema } } } },
+    responses: {
+        200: {
+            description: "연결 시도",
+            content: { "application/json": { schema: successResponse(googleLinkChallengeSchema) } },
+        },
+        ...errorResponses(
+            "VALIDATION_ERROR",
+            "INVALID_PASSWORD",
+            "UNAUTHORIZED",
+            "TOKEN_EXPIRED",
+            "GOOGLE_ACCOUNT_ALREADY_LINKED",
+            "PASSWORD_NOT_SET",
+            "GOOGLE_LOGIN_UNAVAILABLE",
+        ),
+    },
+});
+router.post(
+    "/me/google/link-challenge",
+    authenticate,
+    validate({ body: googleLinkChallengeBodySchema }),
+    googleAccountController.startLink,
+);
+
+registry.registerPath({
+    method: "post",
+    path: "/users/me/google/link",
+    tags: ["User"],
+    summary: "구글 연결 완료 (USER-07)",
+    description:
+        "화면: A08 구글 계정 선택 → '연결됨'. 연결 시도와 구글 ID 토큰(nonce 포함)을 확인하고 이 계정에 구글을 연결한다. 이후 이 구글 계정으로 AUTH-07 로그인이 된다. 같은 요청을 다시 보내도 중복 연결되지 않는다.",
+    security: bearerAuth,
+    request: { body: { required: true, content: { "application/json": { schema: googleLinkBodySchema } } } },
+    responses: {
+        200: {
+            description: "연결된 상태",
+            content: { "application/json": { schema: successResponse(googleConnectionSchema) } },
+        },
+        ...errorResponses(
+            "VALIDATION_ERROR",
+            "GOOGLE_AUTH_EXPIRED",
+            "INVALID_GOOGLE_TOKEN",
+            "UNAUTHORIZED",
+            "TOKEN_EXPIRED",
+            "GOOGLE_EMAIL_NOT_VERIFIED",
+            "GOOGLE_ACCOUNT_ALREADY_LINKED",
+            "GOOGLE_ACCOUNT_IN_USE",
+            "GOOGLE_LINK_CHANGED",
+            "GOOGLE_LOGIN_UNAVAILABLE",
+        ),
+    },
+});
+router.post(
+    "/me/google/link",
+    authenticate,
+    validate({ body: googleLinkBodySchema }),
+    googleAccountController.completeLink,
+);
+
+registry.registerPath({
+    method: "delete",
+    path: "/users/me/google",
+    tags: ["User"],
+    summary: "구글 연결 해제 (USER-08)",
+    description:
+        "화면: A08 '연결 해제' → 비밀번호 확인 팝업. 비밀번호와 화면의 version을 확인하고 연결을 끊는다. 구글로만 가입한 계정은 409 GOOGLE_LAST_LOGIN_METHOD. 로그인 중인 기기는 그대로 유지된다.",
+    security: bearerAuth,
+    request: { body: { required: true, content: { "application/json": { schema: googleUnlinkBodySchema } } } },
+    responses: {
+        200: {
+            description: "해제된 상태",
+            content: { "application/json": { schema: successResponse(googleConnectionSchema) } },
+        },
+        ...errorResponses(
+            "VALIDATION_ERROR",
+            "INVALID_PASSWORD",
+            "UNAUTHORIZED",
+            "TOKEN_EXPIRED",
+            "GOOGLE_LAST_LOGIN_METHOD",
+            "GOOGLE_LINK_CHANGED",
+        ),
+    },
+});
+router.delete("/me/google", authenticate, validate({ body: googleUnlinkBodySchema }), googleAccountController.unlink);
 
 export default router;

@@ -64,6 +64,10 @@ function createGoogleUser(google: GoogleProfile) {
         password: null,
         nickname: nicknameFromGoogle(google),
         googleSub: google.sub,
+        googleEmail: google.email,
+        googleName: google.name,
+        googleLinkedAt: new Date(),
+        googleLinkVersion: 1,
     });
 }
 

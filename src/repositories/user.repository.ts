@@ -20,8 +20,52 @@ export const userRepository = {
     },
 
     // password는 구글로만 가입하면 null
-    create(data: { email: string; password: string | null; nickname: string; googleSub?: string }) {
+    create(data: {
+        email: string;
+        password: string | null;
+        nickname: string;
+        googleSub?: string;
+        googleEmail?: string;
+        googleName?: string | null;
+        googleLinkedAt?: Date;
+        googleLinkVersion?: number;
+    }) {
         return prisma.user.create({ data });
+    },
+
+    // 구글 연동(USER-07): 연결이 비어 있고 연결 버전이 그대로일 때만 저장한다. 바뀐 행 수(0 또는 1)를 돌려준다
+    // 구글 계정이 다른 회원에 이미 연결돼 있으면 UNIQUE 위반(P2002)
+    async linkGoogle(
+        userId: bigint,
+        expectedVersion: number,
+        google: { sub: string; email: string; name: string | null },
+    ) {
+        const { count } = await prisma.user.updateMany({
+            where: { userId, googleSub: null, googleLinkVersion: expectedVersion, deletedAt: null },
+            data: {
+                googleSub: google.sub,
+                googleEmail: google.email,
+                googleName: google.name,
+                googleLinkedAt: new Date(),
+                googleLinkVersion: { increment: 1 },
+            },
+        });
+        return count;
+    },
+
+    // 구글 해제(USER-08): 연결돼 있고 연결 버전이 그대로일 때만 지운다
+    async unlinkGoogle(userId: bigint, expectedVersion: number) {
+        const { count } = await prisma.user.updateMany({
+            where: { userId, googleSub: { not: null }, googleLinkVersion: expectedVersion, deletedAt: null },
+            data: {
+                googleSub: null,
+                googleEmail: null,
+                googleName: null,
+                googleLinkedAt: null,
+                googleLinkVersion: { increment: 1 },
+            },
+        });
+        return count;
     },
     update(
         userId: bigint,

@@ -71,6 +71,38 @@ export const ERRORS = {
         message: "구글 로그인을 사용할 수 없습니다.",
     },
 
+    // 구글 계정 연동·해제 (2026-11-19, 계정 정보 A08)
+    GOOGLE_ACCOUNT_ALREADY_LINKED: {
+        no: 2012,
+        title: "이미 구글 연결됨",
+        status: 409,
+        message: "이미 구글 계정이 연결되어 있습니다.",
+    },
+    GOOGLE_ACCOUNT_IN_USE: {
+        no: 2013,
+        title: "다른 회원이 쓰는 구글 계정",
+        status: 409,
+        message: "다른 계정에 연결된 구글 계정입니다.",
+    },
+    GOOGLE_AUTH_EXPIRED: {
+        no: 2014,
+        title: "연결 시도 만료",
+        status: 400,
+        message: "구글 계정 확인 시간이 지났습니다. 처음부터 다시 시도해 주세요.",
+    },
+    GOOGLE_LINK_CHANGED: {
+        no: 2015,
+        title: "연결 상태가 바뀜",
+        status: 409,
+        message: "다른 화면에서 구글 연결 상태가 바뀌었습니다. 새로고침해 주세요.",
+    },
+    GOOGLE_LAST_LOGIN_METHOD: {
+        no: 2016,
+        title: "마지막 로그인 수단",
+        status: 409,
+        message: "구글이 유일한 로그인 방법이라 연결을 해제할 수 없습니다.",
+    },
+
     // 대화
     INVALID_SHARE_URL: {
         no: 3001,
