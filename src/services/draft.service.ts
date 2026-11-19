@@ -6,7 +6,12 @@ import { canEditDraft, getAccess } from "./workspaceAccess.js";
 import { touchSearchIndex } from "./searchIndex.js";
 import { touchRelationIndex } from "./relationIndex.js";
 import { toUserRef } from "../schemas/common.schema.js";
-import { describeAiError, requestRevision, toAnalysisConversation } from "../utils/aiServer.js";
+import {
+    describeAiError,
+    requestRevision,
+    toAnalysisConversationsV2,
+    type AnalysisConversationV2,
+} from "../utils/aiServer.js";
 import { AppError } from "../utils/appError.js";
 import type { ErrorCode } from "../utils/errors.js";
 import { logger } from "../utils/logger.js";
@@ -146,27 +151,42 @@ export async function findEditableDraft(userId: number, draftId: number) {
     return draft;
 }
 
-// AI-03: 기준 회차와 보완 항목, 남아 있는 원본 대화(발화)를 AI 서버로 보내고, 응답으로 받은 새 회차를 저장한다.
-// AI 보완 요청(DRAFT-04)과 보완 재시도(DRAFT-05)에서 쓴다. 호출하는 쪽은 await 하지 않는다.
+// AI 보완에 보낼 원본 대화를 만들고 보낼 수 있는지 확인한다 (DRAFT-04·DRAFT-05 공용)
+//  - 빈 발화·발화 없는 대화는 뺀다 (AI 서버가 422로 거절). 발화에 코드 블록이 있으면 codeBlocks로 같이 보낸다
+//  - 누락 내용 보완(MISSING_CONTENT)인데 남는 대화가 없으면 409 SOURCES_DELETED (설계서 P04)
+//  - 분량 줄이기(TOO_LONG)만이면 대화가 없어도 된다 (초안만으로 보완). 대화가 남아 있으면 출처 연결(sourceLinks)용으로 같이 보낸다
+function toRevisionInput(
+    reasons: string[],
+    conversations: ConversationWithMessages[],
+    message: string,
+): AnalysisConversationV2[] {
+    const input = toAnalysisConversationsV2(conversations);
+    if (reasons.includes("MISSING_CONTENT") && input.length === 0) throw new AppError("SOURCES_DELETED", { message });
+    return input;
+}
+
+// AI-03: 기준 회차와 보완 항목, 남아 있는 원본 대화(발화)를 AI 서버로 보내고, 응답으로 받은 보완본을 새 회차(draftId)에 저장한다.
+// AI 보완 요청(DRAFT-04)과 보완 재시도(DRAFT-05)에서 쓴다. 호출하는 쪽은 await 하지 않는다. 기준 회차는 그대로 남는다.
 // 실패하면 새 회차를 FAILED로 바꿔서 A05-2에 '보완 실패'와 '다시 시도'가 보이게 한다.
 export async function sendRevisionRequest(
     draftId: bigint,
     base: Draft,
     reasons: string[],
-    conversations: ConversationWithMessages[],
+    conversations: AnalysisConversationV2[],
 ) {
     try {
         const result = await requestRevision(
             Number(draftId),
+            // AI 서버는 요약을 문자열로만 받는다 (예전 데이터에서 비어 있으면 빈 문자열)
             {
                 title: base.title,
                 category: base.category,
-                summary: base.summary,
+                summary: base.summary ?? "",
                 keywords: toKeywords(base.keywords),
                 content: base.content,
             },
             reasons,
-            conversations.map(toAnalysisConversation),
+            conversations,
         );
         if (await draftRepository.saveRevisionResult(draftId, result)) {
             logger.info("AI 보완 초안을 생성하였습니다.", { draftId, baseDraftId: base.draftId });
@@ -194,11 +214,11 @@ async function retryRevision(
         throw new AppError("INVALID_DRAFT_STATUS");
 
     const reasons = draft.feedbacks.map(({ reason }) => reason);
-    if (reasons.includes("MISSING_CONTENT") && conversations.length === 0) {
-        throw new AppError("SOURCES_DELETED", {
-            message: "원본 대화가 모두 삭제되어 누락 내용 보완을 다시 요청할 수 없습니다.",
-        });
-    }
+    const input = toRevisionInput(
+        reasons,
+        conversations,
+        "원본 대화가 모두 삭제되어 누락 내용 보완을 다시 요청할 수 없습니다.",
+    );
 
     const created = await draftRepository.createRevision(
         draft.documentId,
@@ -209,7 +229,7 @@ async function retryRevision(
     );
     if (!created) throw new AppError("REVISION_IN_PROGRESS");
 
-    void sendRevisionRequest(created.draftId, parent, reasons, conversations);
+    void sendRevisionRequest(created.draftId, parent, reasons, input);
     return { draftId: Number(created.draftId), status: "GENERATING" };
 }
 
@@ -274,7 +294,7 @@ export const draftService = {
     },
 
     // 고른 회차를 기준으로 AI 보완(새 회차)을 요청한다. 기준 회차는 저장된 내용(직접 수정했다면 수정본) 그대로 쓰고 GENERATED로 남는다.
-    // 새 회차를 GENERATING으로 만들고 바로 응답하며, AI 서버 요청(AI-03)은 뒤에서 보낸다. AI 서버가 응답으로 새 회차를 주면 저장한다.
+    // 새 회차를 GENERATING으로 만들고 바로 응답하며, AI 서버 요청(AI-03)은 뒤에서 보낸다. AI 서버가 응답으로 보완본을 주면 새 회차에 저장한다.
     async requestRevision(
         userId: number,
         draftId: number,
@@ -284,17 +304,17 @@ export const draftService = {
 
         // 설계서 P04: 연결 원문이 모두 삭제됐으면 '누락 내용 보완'은 고를 수 없다 (분량 줄이기는 초안만으로 가능)
         const conversations = await draftRepository.findLiveConversations(base.documentId);
-        if (reasons.includes("MISSING_CONTENT") && conversations.length === 0) {
-            throw new AppError("SOURCES_DELETED", {
-                message: "원본 대화가 모두 삭제되어 누락 내용 보완을 요청할 수 없습니다.",
-            });
-        }
+        const input = toRevisionInput(
+            reasons,
+            conversations,
+            "원본 대화가 모두 삭제되어 누락 내용 보완을 요청할 수 없습니다.",
+        );
 
         const created = await draftRepository.createRevision(base.documentId, base.draftId, BigInt(userId), reasons);
         if (!created) throw new AppError("REVISION_IN_PROGRESS");
 
         // await 하지 않는다: AI 서버가 느리거나 죽어 있어도 사용자는 기다리지 않는다
-        void sendRevisionRequest(created.draftId, base, reasons, conversations);
+        void sendRevisionRequest(created.draftId, base, reasons, input);
 
         return { draftId: Number(created.draftId), versionNo: created.versionNo, status: "GENERATING" };
     },
