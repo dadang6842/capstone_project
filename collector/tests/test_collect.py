@@ -29,7 +29,7 @@ class CollectEntryTests(unittest.TestCase):
     def test_success_outputs_clean_messages_only(self):
         code, payload = run(record=RECORD)
         self.assertEqual(code, 0)
-        self.assertEqual(payload, {'ok': True, 'captureId': 'share_abc', 'title': 'JWT 정리', 'messages': [
+        self.assertEqual(payload, {'ok': True, 'captureId': 'share_abc', 'title': 'JWT 정리', 'resolvedUrl': None, 'messages': [
             {'sourceMessageId': 'm1', 'role': 'USER', 'content': '질문', 'codeBlocks': []},
             {'sourceMessageId': 'm2', 'role': 'ASSISTANT', 'content': '답변\nconst a = 1;', 'codeBlocks': ['const a = 1;']}]})
 
