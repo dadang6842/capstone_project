@@ -116,10 +116,11 @@ model Conversation {
   resolvedUrl            String?              @map("resolved_url") @db.VarChar(2048) /// 리디렉션 뒤 최종 공유 주소 (수집 성공 시). 단축 주소(g.co)면 shareUrl과 다름
   externalConversationId String?              @map("external_conversation_id") @db.VarChar(255) /// 비공개 가져오기: 서비스의 대화 ID
   captureId              String?              @map("capture_id") @db.VarChar(80) /// 내용 해시. 공유 링크는 share_ + SHA-256(최종 주소·제목·발화), 비공개 가져오기는 import_ + SHA-256(서비스·대화 ID·발화). 중복 확인용, 수집 전 NULL
-  importKey              String?              @unique(map: "uk_conversations_import_key") @map("import_key") @db.Char(64) /// 비공개 가져오기 중복 키 SHA-256(공간 + capture_id). 동시 저장도 막으려고 UNIQUE. 대화를 삭제하면 NULL로 비움
+  dedupKey               String?              @unique(map: "uk_conversations_dedup_key") @map("dedup_key") @db.Char(64) /// 중복 키 SHA-256(공간 + AI 서비스 + 정규화한 발화). 공유 링크·비공개 가져오기 공통. COLLECTED 대화에만 채우고 삭제하면 NULL. UNIQUE라 동시 저장도 1개만 (2026-11-19)
   title             String?            @db.VarChar(255) /// 공유 페이지 제목. 수집 전·실패면 NULL
   status            ConversationStatus @default(COLLECTING)
   collectFailReason CollectFailReason? @map("collect_fail_reason") /// FAILED일 때만
+  duplicateOfId     BigInt?            @map("duplicate_of_id") @db.UnsignedBigInt /// DUPLICATED일 때 이미 있는 같은 대화의 아이디 (FK 없음, 그 대화가 나중에 삭제될 수 있음)
   createdAt         DateTime           @default(now()) @map("created_at") @db.DateTime(3) /// 링크 입력(등록) 일시
   deletedAt         DateTime?          @map("deleted_at") @db.DateTime(3) /// 대화 삭제(소프트)
 

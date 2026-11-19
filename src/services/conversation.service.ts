@@ -1,6 +1,10 @@
-import { createHash } from "node:crypto";
-import { Prisma, type Conversation, type ConversationProvider } from "../generated/prisma/client.js";
-import { conversationRepository, type ConversationWithDocuments } from "../repositories/conversation.repository.js";
+import type { Conversation, ConversationProvider } from "../generated/prisma/client.js";
+import {
+    conversationRepository,
+    isDedupConflict,
+    type ConversationWithDocuments,
+} from "../repositories/conversation.repository.js";
+import { contentKey, dedupKey } from "../utils/conversationKey.js";
 import { canDeleteConversation, getAccess, resolveSpace, spaceFilter } from "./workspaceAccess.js";
 import { toGenerationCards } from "./generation.service.js";
 import { collectSharedConversation, CollectError } from "../utils/collector.js";
@@ -31,6 +35,7 @@ function toConversationResponse(conversation: ConversationWithRegistrant, messag
         source: conversation.source,
         status: conversation.status,
         collectFailReason: conversation.collectFailReason,
+        duplicateConversationId: conversation.duplicateOfId === null ? null : Number(conversation.duplicateOfId),
         messageCount,
         registrant: toUserRef(conversation.user),
         createdAt: conversation.createdAt,
@@ -86,8 +91,6 @@ function toGeneration({
     };
 }
 
-const sha256 = (value: string) => createHash("sha256").update(value, "utf8").digest("hex");
-
 // Markdown 코드 블록(``` 또는 ~~~ 울타리) 안의 코드만 뽑는다. 공유 링크 수집의 codeBlocks와 같은 용도 (AI-01에 코드 경계를 알려 줌)
 function extractCodeBlocks(markdown: string): string[] {
     const blocks: string[] = [];
@@ -97,7 +100,7 @@ function extractCodeBlocks(markdown: string): string[] {
     return blocks;
 }
 
-// 비공개 가져오기 원문 정규화: 줄바꿈을 \n으로 통일하고 앞뒤 공백만 정리 (Markdown·코드 들여쓰기는 그대로), sequence 순으로 정렬
+// 비공개 가져오기 원문 정리(저장용): 줄바꿈을 \n으로 통일하고 앞뒤 공백만 정리 (Markdown·코드 들여쓰기는 그대로), sequence 순으로 정렬
 function normalizeImportedMessages(messages: ImportConversationBody["messages"]) {
     return [...messages]
         .sort((a, b) => a.sequence - b.sequence)
@@ -176,10 +179,11 @@ export const conversationService = {
     },
 
     // 확장 프로그램이 읽은 비공개 대화를 바로 COLLECTED로 저장한다 (수집 단계 없음)
-    // 중복: 같은 공간(개인=나, 팀=그 팀) + 서비스 + 대화 ID + 서버가 다시 계산한 원문 해시가 같으면 새로 만들지 않고 기존 대화를 돌려준다
-    //  - 프론트의 contentHash는 계산 방식(확장 프로그램 메시지 배열)이 서버와 달라 형식만 확인하고 쓰지 않는다
-    //  - 대화가 이어져 발화가 늘면 해시가 달라져 새 대화로 저장된다 (공유 링크와 같음)
-    //  - 재전송·동시 저장은 import_key UNIQUE로 막는다
+    // 중복 (2026-11-19 공통 규칙, utils/conversationKey.ts): 같은 공간(개인=나, 팀=그 팀) + 같은 AI 서비스 + 같은 발화면
+    // 새로 만들지 않고 기존 대화를 돌려준다. 공유 링크로 넣은 대화와도 비교한다. 서비스 대화 ID·제목은 보지 않는다
+    //  - 프론트의 contentHash는 계산 방식이 서버와 달라 형식만 확인하고 쓰지 않는다
+    //  - 대화가 이어져 발화가 늘면 새 대화로 저장된다
+    //  - 재전송·동시 저장은 dedup_key UNIQUE로 막는다
     async importConversation(
         userId: number,
         body: ImportConversationBody,
@@ -187,14 +191,11 @@ export const conversationService = {
         const space = await resolveSpace(userId, body.workspaceId);
         const provider = body.provider.toUpperCase() as ConversationProvider;
         const messages = normalizeImportedMessages(body.messages);
-        const captureId =
-            "import_" +
-            sha256(JSON.stringify({ provider, externalConversationId: body.externalConversationId, messages }));
-        const spaceKey = space === null ? `user:${userId}` : `workspace:${space}`;
-        const importKey = sha256(`${spaceKey}|${captureId}`);
+        const key = contentKey(provider, messages);
+        const spaceDedupKey = dedupKey({ userId, workspaceId: space }, key);
 
         const duplicateOf = async () => {
-            const existing = await conversationRepository.findByImportKey(importKey);
+            const existing = await conversationRepository.findByDedupKey(spaceDedupKey);
             return existing && !existing.deletedAt ? existing : null;
         };
         const found = await duplicateOf();
@@ -219,8 +220,8 @@ export const conversationService = {
                 provider,
                 externalConversationId: body.externalConversationId,
                 title,
-                captureId,
-                importKey,
+                captureId: `import_${key}`,
+                dedupKey: spaceDedupKey,
                 messages: messages.map((message, i) => ({
                     ...message,
                     sourceMessageId: `import-${i + 1}`,
@@ -235,7 +236,7 @@ export const conversationService = {
             };
         } catch (err) {
             // 같은 원문을 동시에 보낸 다른 요청이 먼저 저장함 → 그 대화를 중복으로 돌려준다
-            if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+            if (isDedupConflict(err)) {
                 const winner = await duplicateOf();
                 if (winner)
                     return {

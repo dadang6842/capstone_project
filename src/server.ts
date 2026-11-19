@@ -6,19 +6,22 @@ import { draftRepository } from "./repositories/draft.repository.js";
 import { generationRepository } from "./repositories/generation.repository.js";
 
 app.listen(env.PORT, async () => {
-  logger.info("서버를 시작하였습니다.", { port: env.PORT });
-  // 이전 프로세스에서 수집하다 끊긴 대화는 이어 갈 수 없어서 실패로 바꾼다 (사용자가 삭제 후 다시 등록)
-  const { count } = await conversationRepository.failInterruptedCollecting();
-  if (count > 0) logger.info(`중단된 대화 수집 ${count}건을 실패 처리하였습니다.`);
-  // AI 서버 응답을 기다리던 생성 요청·AI 보완 초안도 마찬가지 (사용자가 '다시 시도')
-  const generations = await generationRepository.failInterrupted();
-  if (generations > 0) logger.info(`중단된 지식 문서 생성 ${generations}건을 실패 처리하였습니다.`);
-  const drafts = await draftRepository.failInterruptedGenerating();
-  if (drafts > 0) logger.info(`중단된 초안 생성 ${drafts}건을 실패 처리하였습니다.`);
+    logger.info("서버를 시작하였습니다.", { port: env.PORT });
+    // 이전 프로세스에서 수집하다 끊긴 대화는 이어 갈 수 없어서 실패로 바꾼다 (사용자가 삭제 후 다시 등록)
+    const { count } = await conversationRepository.failInterruptedCollecting();
+    if (count > 0) logger.info(`중단된 대화 수집 ${count}건을 실패 처리하였습니다.`);
+    // 대화 중복 키(2026-11-19 공통 규칙)가 비어 있는 수집 완료 대화에 키를 채운다 (처음 한 번만 실제로 채우고, 이후엔 대상 없음)
+    const filled = await conversationRepository.backfillDedupKeys();
+    if (filled > 0) logger.info(`대화 중복 키 ${filled}건을 채웠습니다.`);
+    // AI 서버 응답을 기다리던 생성 요청·AI 보완 초안도 마찬가지 (사용자가 '다시 시도')
+    const generations = await generationRepository.failInterrupted();
+    if (generations > 0) logger.info(`중단된 지식 문서 생성 ${generations}건을 실패 처리하였습니다.`);
+    const drafts = await draftRepository.failInterruptedGenerating();
+    if (drafts > 0) logger.info(`중단된 초안 생성 ${drafts}건을 실패 처리하였습니다.`);
 });
 
 // 어디서도 잡지 못한 오류도 error 로그에 남긴다
 process.on("unhandledRejection", (reason) => {
-  const err = reason instanceof Error ? reason : new Error(String(reason));
-  logger.error("INTERNAL_SERVER_ERROR", `unhandledRejection: ${err.message}`, undefined, err.stack);
+    const err = reason instanceof Error ? reason : new Error(String(reason));
+    logger.error("INTERNAL_SERVER_ERROR", `unhandledRejection: ${err.message}`, undefined, err.stack);
 });

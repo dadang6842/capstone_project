@@ -27,7 +27,7 @@ registry.registerPath({
         "화면: A03 → P01 대화 등록. ChatGPT(/share/, /s/, chat.openai.com)·Gemini(g.co 단축, gemini.google.com, u/N)·Claude 공유 링크(문장 속 링크도 가능)를 받아 " +
         "대화를 COLLECTING으로 만들고 바로 202로 응답한다. 지원 형식의 링크가 없으면 400 INVALID_SHARE_URL, 서로 다른 링크가 여러 개면 400 INVALID_SHARE_URL(details.candidates). " +
         "수집은 서버가 뒤에서 하며(리디렉션은 단계마다 서비스 도메인인지 확인), 프론트는 받은 conversationId로 원본 대화 열람(CONV-03)을 폴링해 COLLECTED·FAILED를 확인한다. " +
-        "리디렉션 뒤 최종 주소와 내용이 이미 수집한 대화와 같으면(capture_id) FAILED·collectFailReason DUPLICATED가 된다(같은 공간 안에서만 비교). " +
+        "수집이 끝났을 때 같은 공간에 같은 AI 서비스·같은 발화의 대화(공유 링크·비공개 가져오기 모두)가 이미 있으면 FAILED·collectFailReason DUPLICATED, duplicateConversationId = 기존 대화. 링크·제목은 보지 않는다. " +
         "팀 화면에서는 body에 workspaceId를 넣는다(팀원이면 역할과 관계없이 등록 가능, 팀원이 아니면 404 WORKSPACE_NOT_FOUND).",
     security: bearerAuth,
     request: { body: { required: true, content: { "application/json": { schema: createConversationBodySchema } } } },
@@ -54,7 +54,7 @@ registry.registerPath({
     summary: "비공개 대화 가져오기 (CONV-05)",
     description:
         "화면: P01 대화 등록 > 서비스 작은 창의 가져오기·선택해서 가져오기. 확장 프로그램이 읽은 ChatGPT·Gemini·Claude 대화 원문을 바로 COLLECTED로 저장한다(수집 단계 없음, shareUrl null). " +
-        "같은 공간(개인=나, 팀=그 팀)에 서비스·대화 ID·원문(서버가 정규화해 다시 계산한 해시)이 같은 대화가 있으면 새로 만들지 않고 200 + duplicate: true + 기존 conversationId. " +
+        "같은 공간(개인=나, 팀=그 팀)에 같은 AI 서비스·같은 발화(서버가 정규화해 비교, 공유 링크로 넣은 대화 포함)의 대화가 있으면 새로 만들지 않고 200 + duplicate: true + 기존 conversationId. 대화 ID·제목은 보지 않는다. " +
         "새로 저장하면 201 + duplicate: false. 대화를 삭제한 뒤에는 다시 가져올 수 있다. 발화가 늘어난 대화는 새 대화로 저장된다. " +
         "contentHash는 형식(64자리 16진수)만 확인한다. 팀 화면에서는 workspaceId를 넣는다(팀원이면 역할과 관계없이 가능, 아니면 404 WORKSPACE_NOT_FOUND). 요청 본문은 20MB까지.",
     security: bearerAuth,

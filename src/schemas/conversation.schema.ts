@@ -20,7 +20,7 @@ export const collectFailReasonSchema = z
     .nullable()
     .meta({
         description:
-            "수집 실패 원인 (FAILED일 때만). NOT_ACCESSIBLE 링크 접근 실패(삭제·비공개), UNSUPPORTED_CONTENT 수집할 수 없는 대화(이미지 전용 발화 등), TIMEOUT 시간 초과, COLLECT_ERROR 기타, DUPLICATED 이미 수집한 대화와 내용이 같음(삭제하고 기존 대화를 쓰면 됨)",
+            "수집 실패 원인 (FAILED일 때만). NOT_ACCESSIBLE 링크 접근 실패(삭제·비공개), UNSUPPORTED_CONTENT 수집할 수 없는 대화(이미지 전용 발화 등), TIMEOUT 시간 초과, COLLECT_ERROR 기타, DUPLICATED 같은 공간에 같은 AI 서비스·같은 발화의 대화가 이미 있음(공유 링크·비공개 가져오기 공통, duplicateConversationId가 기존 대화. 이 대화는 삭제하고 기존 대화를 쓰면 됨)",
     });
 
 export const conversationProviderSchema = z
@@ -53,6 +53,15 @@ export const conversationSchema = z
         source: conversationSourceSchema,
         status: conversationStatusSchema,
         collectFailReason: collectFailReasonSchema,
+        duplicateConversationId: z
+            .number()
+            .int()
+            .nullable()
+            .meta({
+                example: null,
+                description:
+                    "collectFailReason이 DUPLICATED일 때 이미 있는 같은 대화의 아이디 (그 대화로 이동할 때 사용, 이후 삭제됐을 수 있음). 그 밖에는 null",
+            }),
         messageCount: z.number().int().meta({ example: 34, description: "수집한 발화 수 (수집 전·실패면 0)" }),
         registrant: userRefSchema.meta({
             description: "등록자 (팀 화면의 '등록자'). 탈퇴로 영구 삭제된 회원이면 null",

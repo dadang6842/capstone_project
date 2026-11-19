@@ -6,6 +6,7 @@ import {
     type MessageRole,
 } from "../generated/prisma/client.js";
 import type { CollectedConversation } from "../utils/collector.js";
+import { contentKey, dedupKey } from "../utils/conversationKey.js";
 import type { SpaceFilter } from "../services/workspaceAccess.js";
 import { generationCardSelect } from "./generationCard.select.js";
 
@@ -54,9 +55,58 @@ export type ImportedConversation = {
     externalConversationId: string;
     title: string | null;
     captureId: string;
-    importKey: string;
+    dedupKey: string;
     messages: { sourceMessageId: string; role: MessageRole; content: string; codeBlocks: string[] }[];
 };
+
+export const isDedupConflict = (err: unknown) =>
+    err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002";
+
+async function saveCollectedOnce(
+    conversationId: bigint,
+    { captureId, title, messages, resolvedUrl }: CollectedConversation,
+) {
+    return prisma.$transaction(async (tx) => {
+        const target = await tx.conversation.findUnique({
+            where: { conversationId },
+            select: { userId: true, workspaceId: true, provider: true, status: true, deletedAt: true },
+        });
+        if (!target || target.status !== "COLLECTING" || target.deletedAt) return { result: "SKIPPED" as const };
+
+        const key = dedupKey(target, contentKey(target.provider, messages));
+        const duplicate = await tx.conversation.findUnique({
+            where: { dedupKey: key },
+            select: { conversationId: true },
+        });
+        if (duplicate && duplicate.conversationId !== conversationId) {
+            await tx.conversation.update({
+                where: { conversationId },
+                data: {
+                    status: "FAILED",
+                    collectFailReason: "DUPLICATED",
+                    duplicateOfId: duplicate.conversationId,
+                    captureId,
+                },
+            });
+            return { result: "DUPLICATED" as const, duplicateOf: duplicate.conversationId };
+        }
+
+        await tx.conversation.update({
+            where: { conversationId },
+            data: { status: "COLLECTED", captureId, title, resolvedUrl: resolvedUrl ?? null, dedupKey: key },
+        });
+        // 코드 블록이 없는 발화는 code_blocks를 NULL로 (예전에 수집한 발화와 같게)
+        await tx.conversationMessage.createMany({
+            data: messages.map(({ codeBlocks, ...message }, i) => ({
+                conversationId,
+                sequence: i + 1,
+                ...message,
+                codeBlocks: codeBlocks.length > 0 ? codeBlocks : Prisma.DbNull,
+            })),
+        });
+        return { result: "SAVED" as const };
+    });
+}
 
 export const conversationRepository = {
     create(userId: bigint, workspaceId: bigint | null, shareUrl: string, provider: ConversationProvider = "CHATGPT") {
@@ -64,7 +114,7 @@ export const conversationRepository = {
     },
 
     // 비공개 가져오기: 대화와 발화를 한 번에 COLLECTED로 저장한다.
-    // import_key가 UNIQUE라 같은 원문을 동시에 두 번 보내도 한쪽은 P2002로 실패한다 (서비스가 기존 대화를 찾아 duplicate로 응답)
+    // dedup_key가 UNIQUE라 같은 원문을 동시에 두 번 보내도 한쪽은 P2002로 실패한다 (서비스가 기존 대화를 찾아 duplicate로 응답)
     createImported({ messages, ...conversation }: ImportedConversation) {
         return prisma.$transaction(async (tx) => {
             const created = await tx.conversation.create({
@@ -82,65 +132,27 @@ export const conversationRepository = {
         });
     },
 
-    // 비공개 가져오기 중복 확인 (삭제한 대화는 import_key를 비워서 걸리지 않는다)
-    findByImportKey(importKey: string) {
+    // 중복 확인 (공유 링크·비공개 가져오기 공통). 삭제한 대화는 dedup_key를 비워서 걸리지 않는다
+    findByDedupKey(key: string) {
         return prisma.conversation.findUnique({
-            where: { importKey },
+            where: { dedupKey: key },
             select: { conversationId: true, status: true, deletedAt: true },
         });
     },
 
     // 수집 성공: 발화를 저장하고 COLLECTED로 바꾼다. 결과: SAVED / DUPLICATED / SKIPPED
-    //  - 같은 공간의 다른 대화(삭제 안 함, 수집 완료)에 같은 capture_id가 있으면 저장하지 않고 FAILED(DUPLICATED)
-    //    (개인 공간: 내 개인 대화끼리, 팀 공간: 그 팀 대화끼리. 개인에 있는 대화를 팀에 다시 올리는 건 막지 않는다)
-    //    (capture_id = 링크 + 대화 내용 해시라, 같은 링크라도 대화가 이어져 내용이 늘었으면 새 대화로 저장된다)
+    //  - 같은 공간에 같은 AI 서비스·같은 발화의 대화(공유 링크든 비공개 가져오기든)가 이미 있으면 저장하지 않고
+    //    FAILED(DUPLICATED) + duplicate_of_id = 기존 대화 (2026-11-19 공통 중복 규칙, utils/conversationKey.ts)
+    //    (개인 공간: 내 개인 대화끼리, 팀 공간: 그 팀 대화끼리. 링크·제목은 보지 않고, 대화가 이어져 발화가 늘었으면 새 대화)
     //  - 수집 중에 대화를 삭제했으면 아무것도 하지 않는다
-    // 수집은 대기열에서 하나씩 끝나서 이 확인과 저장 사이에 같은 내용이 끼어들지 않는다 (동시 실행 1개 기준)
-    saveCollected(conversationId: bigint, { captureId, title, messages, resolvedUrl }: CollectedConversation) {
-        return prisma.$transaction(async (tx) => {
-            const target = await tx.conversation.findUnique({
-                where: { conversationId },
-                select: { userId: true, workspaceId: true, status: true, deletedAt: true },
-            });
-            if (!target || target.status !== "COLLECTING" || target.deletedAt) return { result: "SKIPPED" as const };
-
-            const space =
-                target.workspaceId === null
-                    ? { userId: target.userId, workspaceId: null }
-                    : { workspaceId: target.workspaceId };
-            const duplicate = await tx.conversation.findFirst({
-                where: {
-                    ...space,
-                    captureId,
-                    status: "COLLECTED",
-                    deletedAt: null,
-                    conversationId: { not: conversationId },
-                },
-                select: { conversationId: true },
-            });
-            if (duplicate) {
-                await tx.conversation.update({
-                    where: { conversationId },
-                    data: { status: "FAILED", collectFailReason: "DUPLICATED", captureId },
-                });
-                return { result: "DUPLICATED" as const, duplicateOf: duplicate.conversationId };
-            }
-
-            await tx.conversation.update({
-                where: { conversationId },
-                data: { status: "COLLECTED", captureId, title, resolvedUrl: resolvedUrl ?? null },
-            });
-            // 코드 블록이 없는 발화는 code_blocks를 NULL로 (예전에 수집한 발화와 같게)
-            await tx.conversationMessage.createMany({
-                data: messages.map(({ codeBlocks, ...message }, i) => ({
-                    conversationId,
-                    sequence: i + 1,
-                    ...message,
-                    codeBlocks: codeBlocks.length > 0 ? codeBlocks : Prisma.DbNull,
-                })),
-            });
-            return { result: "SAVED" as const };
-        });
+    //  - 같은 내용을 동시에 저장하면 dedup_key UNIQUE로 한쪽이 실패 → 한 번 더 시도해서 DUPLICATED로 정리
+    async saveCollected(conversationId: bigint, collected: CollectedConversation) {
+        try {
+            return await saveCollectedOnce(conversationId, collected);
+        } catch (err) {
+            if (!isDedupConflict(err)) throw err;
+            return saveCollectedOnce(conversationId, collected);
+        }
     },
 
     markCollectFailed(conversationId: bigint, reason: CollectFailReason) {
@@ -156,6 +168,41 @@ export const conversationRepository = {
             where: { status: "COLLECTING" },
             data: { status: "FAILED", collectFailReason: "TIMEOUT" },
         });
+    },
+
+    // 서버가 켜질 때: dedup_key가 비어 있는 수집 완료 대화에 공통 중복 키를 채운다 (2026-11-19 규칙 변경 전 데이터)
+    // 이미 같은 공간에 같은 내용이 여러 개 있으면 가장 먼저 등록한 대화에만 채우고 나머지는 비워 둔다 (지우지 않음)
+    async backfillDedupKeys(batchSize = 50) {
+        let filled = 0;
+        let lastId = 0n;
+        for (;;) {
+            const rows = await prisma.conversation.findMany({
+                where: { status: "COLLECTED", deletedAt: null, dedupKey: null, conversationId: { gt: lastId } },
+                orderBy: { conversationId: "asc" },
+                take: batchSize,
+                select: {
+                    conversationId: true,
+                    userId: true,
+                    workspaceId: true,
+                    provider: true,
+                    messages: { orderBy: { sequence: "asc" }, select: { role: true, content: true } },
+                },
+            });
+            if (rows.length === 0) return filled;
+            for (const row of rows) {
+                lastId = row.conversationId;
+                if (row.messages.length === 0) continue;
+                try {
+                    await prisma.conversation.update({
+                        where: { conversationId: row.conversationId },
+                        data: { dedupKey: dedupKey(row, contentKey(row.provider, row.messages)) },
+                    });
+                    filled += 1;
+                } catch (err) {
+                    if (!isDedupConflict(err)) throw err;
+                }
+            }
+        }
     },
 
     // 대화 하나와 등록자, 발화, 이 대화로 만든 문서 (삭제 문서 제외, 최신 문서부터)
@@ -204,11 +251,11 @@ export const conversationRepository = {
     },
 
     // 소프트 삭제. 발화(conversation_messages)는 지우지 않는다 (문서 생성 기록과 함께 남김)
-    // 비공개 가져오기 중복 키(import_key)는 비운다: 지운 뒤 같은 대화를 다시 가져올 수 있게
+    // 중복 키(dedup_key)는 비운다: 지운 뒤 같은 대화를 다시 등록·가져올 수 있게
     softDelete(conversationId: bigint) {
         return prisma.conversation.update({
             where: { conversationId },
-            data: { deletedAt: new Date(), importKey: null },
+            data: { deletedAt: new Date(), dedupKey: null },
         });
     },
 
