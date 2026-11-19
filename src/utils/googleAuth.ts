@@ -12,6 +12,7 @@ export type GoogleProfile = {
     sub: string; // 구글 계정 고유 ID (이메일이 바뀌어도 그대로)
     email: string;
     name: string | null;
+    nonce: string | null; // 계정 연동(USER-07)에서 연결 시작 때 준 nonce와 맞는지 확인
 };
 
 export async function verifyGoogleIdToken(idToken: string): Promise<GoogleProfile> {
@@ -31,10 +32,10 @@ export async function verifyGoogleIdToken(idToken: string): Promise<GoogleProfil
     }
 
     if (!payload?.sub || !payload.email) throw new AppError("INVALID_GOOGLE_TOKEN");
-    // 구글이 확인한 이메일만 믿는다 (같은 이메일 기존 계정에 자동 연결하기 때문)
+    // 구글이 확인한 이메일만 받는다 (가입 시 users.email로 저장하기 때문)
     if (payload.email_verified !== true) throw new AppError("GOOGLE_EMAIL_NOT_VERIFIED");
     // users.email이 VARCHAR(100)
     if (payload.email.length > 100) throw new AppError("VALIDATION_ERROR", { message: "이메일이 너무 깁니다." });
 
-    return { sub: payload.sub, email: payload.email, name: payload.name?.trim() || null };
+    return { sub: payload.sub, email: payload.email, name: payload.name?.trim() || null, nonce: payload.nonce ?? null };
 }

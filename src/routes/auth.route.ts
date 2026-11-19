@@ -77,7 +77,7 @@ registry.registerPath({
     tags: ["Auth"],
     summary: "구글 로그인 (AUTH-07)",
     description:
-        "화면: A01 'Google로 로그인' 버튼 (설계서 추가 기능) → A03. 프론트가 Google 버튼 callback으로 받은 credential을 idToken으로 보낸다. 처음이면 가입(isNewUser true), 같은 이메일로 가입한 계정이 있으면 구글을 자동 연결하고 로그인한다. 탈퇴 유예 중이면 403 WITHDRAWAL_PENDING → AUTH-08.",
+        "화면: A01 'Google로 로그인' 버튼 (설계서 추가 기능) → A03. 프론트가 Google 버튼 callback으로 받은 credential을 idToken으로 보낸다. 처음이면 가입(isNewUser true). 같은 이메일로 가입한 다른 계정이 있으면 합치지 않고 409 EMAIL_DUPLICATED(이메일로 로그인 후 A08에서 연결 안내). 탈퇴 유예 중이면 403 WITHDRAWAL_PENDING → AUTH-08.",
     request: { body: { required: true, content: { "application/json": { schema: googleLoginBodySchema } } } },
     responses: {
         200: {
@@ -89,7 +89,7 @@ registry.registerPath({
             "INVALID_GOOGLE_TOKEN",
             "GOOGLE_EMAIL_NOT_VERIFIED",
             "WITHDRAWAL_PENDING",
-            "GOOGLE_ACCOUNT_MISMATCH",
+            "EMAIL_DUPLICATED",
             "GOOGLE_LOGIN_UNAVAILABLE",
         ),
     },
@@ -114,7 +114,6 @@ registry.registerPath({
             "INVALID_GOOGLE_TOKEN",
             "GOOGLE_EMAIL_NOT_VERIFIED",
             "WITHDRAWAL_NOT_REQUESTED",
-            "GOOGLE_ACCOUNT_MISMATCH",
             "GOOGLE_LOGIN_UNAVAILABLE",
         ),
     },

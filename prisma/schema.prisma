@@ -29,6 +29,11 @@ model User {
   email     String    @unique(map: "uk_users_email") @db.VarChar(100)
   password  String?   @db.VarChar(255) /// bcrypt 해시. 구글로만 가입한 회원은 NULL
   googleSub String?   @unique(map: "uk_users_google_sub") @map("google_sub") @db.VarChar(255) /// 구글 계정 고유 ID(ID 토큰의 sub). 구글 연결 안 했으면 NULL
+
+  googleEmail       String?   @map("google_email") @db.VarChar(255) /// 연결한 구글 계정 이메일 (표시용. 로그인 이메일 users.email과 다를 수 있음)
+  googleName        String?   @map("google_name") @db.VarChar(255) /// 연결한 구글 계정 이름 (없으면 NULL)
+  googleLinkedAt    DateTime? @map("google_linked_at") @db.DateTime(3) /// 구글 연결 일시
+  googleLinkVersion Int       @default(0) @map("google_link_version") @db.UnsignedInt /// 연결·해제할 때마다 +1. 오래된 화면의 요청을 막는 데 씀
   nickname  String    @db.VarChar(12) /// 1~12자 (앞뒤 공백 제거, 공백만 있는 값 불가)
   role      UserRole  @default(USER) /// ADMIN이면 관리자 웹(/api/v1/admin/*) 사용 가능
   createdAt DateTime  @default(now()) @map("created_at") @db.DateTime(3)
