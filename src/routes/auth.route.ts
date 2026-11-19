@@ -8,6 +8,8 @@ import {
     loginResponseSchema,
     refreshTokenBodySchema,
     tokenResponseSchema,
+    googleLoginBodySchema,
+    googleLoginResponseSchema,
 } from "../schemas/auth.schema.js";
 import { z } from "zod";
 import { successResponse } from "../schemas/common.schema.js";
@@ -68,6 +70,60 @@ registry.registerPath({
     },
 });
 router.post("/withdrawal/cancel", validate({ body: loginBodySchema }), authController.cancelWithdrawal);
+
+registry.registerPath({
+    method: "post",
+    path: "/auth/google",
+    tags: ["Auth"],
+    summary: "구글 로그인 (AUTH-07)",
+    description:
+        "화면: A01 'Google로 로그인' 버튼 (설계서 추가 기능) → A03. 프론트가 Google 버튼 callback으로 받은 credential을 idToken으로 보낸다. 처음이면 가입(isNewUser true), 같은 이메일로 가입한 계정이 있으면 구글을 자동 연결하고 로그인한다. 탈퇴 유예 중이면 403 WITHDRAWAL_PENDING → AUTH-08.",
+    request: { body: { required: true, content: { "application/json": { schema: googleLoginBodySchema } } } },
+    responses: {
+        200: {
+            description: "로그인(또는 가입) 성공",
+            content: { "application/json": { schema: successResponse(googleLoginResponseSchema) } },
+        },
+        ...errorResponses(
+            "VALIDATION_ERROR",
+            "INVALID_GOOGLE_TOKEN",
+            "GOOGLE_EMAIL_NOT_VERIFIED",
+            "WITHDRAWAL_PENDING",
+            "GOOGLE_ACCOUNT_MISMATCH",
+            "GOOGLE_LOGIN_UNAVAILABLE",
+        ),
+    },
+});
+router.post("/google", validate({ body: googleLoginBodySchema }), authController.googleLogin);
+
+registry.registerPath({
+    method: "post",
+    path: "/auth/google/withdrawal/cancel",
+    tags: ["Auth"],
+    summary: "구글 계정 탈퇴 취소 (AUTH-08)",
+    description:
+        "화면: A01 탈퇴 처리 중 안내 → A03. AUTH-07에서 403 WITHDRAWAL_PENDING을 받고 사용자가 취소를 확인하면, 같은 idToken으로 호출한다(구글 ID 토큰은 1시간 유효). AUTH-06의 구글 버전.",
+    request: { body: { required: true, content: { "application/json": { schema: googleLoginBodySchema } } } },
+    responses: {
+        200: {
+            description: "탈퇴 취소 + 로그인 성공",
+            content: { "application/json": { schema: successResponse(loginResponseSchema) } },
+        },
+        ...errorResponses(
+            "VALIDATION_ERROR",
+            "INVALID_GOOGLE_TOKEN",
+            "GOOGLE_EMAIL_NOT_VERIFIED",
+            "WITHDRAWAL_NOT_REQUESTED",
+            "GOOGLE_ACCOUNT_MISMATCH",
+            "GOOGLE_LOGIN_UNAVAILABLE",
+        ),
+    },
+});
+router.post(
+    "/google/withdrawal/cancel",
+    validate({ body: googleLoginBodySchema }),
+    authController.cancelWithdrawalWithGoogle,
+);
 
 registry.registerPath({
     method: "post",

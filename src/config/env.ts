@@ -34,6 +34,9 @@ const envSchema = z.object({
     AI_RELATIONS_TIMEOUT_MS: z.coerce.number().int().positive().default(300_000),
     // 문서 수정·삭제·채택 뒤 관계도 동기화를 미뤘다 보내는 시간. 연달아 고치면 마지막 한 번만 보낸다
     AI_RELATIONS_SYNC_DELAY_MS: z.coerce.number().int().min(0).default(3_000),
+    // 구글 로그인 (2026-11-17). Google Cloud 콘솔 > OAuth 클라이언트(웹 애플리케이션)의 클라이언트 ID. 프론트 구글 버튼과 같은 값
+    // 비어 있으면 구글 로그인 API는 503 GOOGLE_LOGIN_UNAVAILABLE (클라이언트 보안 비밀번호는 이 방식에서 쓰지 않음)
+    GOOGLE_CLIENT_ID: z.string().trim().default(""),
 });
 
 export const env = envSchema.parse(process.env);

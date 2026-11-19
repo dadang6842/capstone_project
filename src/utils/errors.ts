@@ -39,6 +39,38 @@ export const ERRORS = {
         message: "현재 비밀번호가 올바르지 않습니다.",
     },
 
+    // 구글 로그인 (2026-11-17)
+    INVALID_GOOGLE_TOKEN: {
+        no: 2007,
+        title: "구글 ID 토큰 무효",
+        status: 401,
+        message: "구글 인증에 실패했습니다. 다시 시도해 주세요.",
+    },
+    GOOGLE_EMAIL_NOT_VERIFIED: {
+        no: 2008,
+        title: "구글 이메일 미인증",
+        status: 403,
+        message: "이메일 인증이 끝나지 않은 구글 계정입니다.",
+    },
+    GOOGLE_ACCOUNT_MISMATCH: {
+        no: 2009,
+        title: "다른 구글 계정",
+        status: 409,
+        message: "이 계정에 연결된 구글 계정이 아닙니다.",
+    },
+    PASSWORD_NOT_SET: {
+        no: 2010,
+        title: "비밀번호 없는 계정",
+        status: 409,
+        message: "구글로 가입해 비밀번호가 없는 계정입니다.",
+    },
+    GOOGLE_LOGIN_UNAVAILABLE: {
+        no: 2011,
+        title: "구글 로그인 설정 없음",
+        status: 503,
+        message: "구글 로그인을 사용할 수 없습니다.",
+    },
+
     // 대화
     INVALID_SHARE_URL: {
         no: 3001,

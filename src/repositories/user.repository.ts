@@ -14,11 +14,19 @@ export const userRepository = {
         return prisma.user.findUnique({ where: { userId } });
     },
 
-    create(data: { email: string; password: string; nickname: string }) {
-        return prisma.user.create({ data });
+    // 구글 로그인: 구글 계정 고유 ID(sub)로 찾는다
+    findByGoogleSub(googleSub: string) {
+        return prisma.user.findUnique({ where: { googleSub } });
     },
 
-    update(userId: bigint, data: { nickname?: string; password?: string; deletedAt?: Date | null }) {
+    // password는 구글로만 가입하면 null
+    create(data: { email: string; password: string | null; nickname: string; googleSub?: string }) {
+        return prisma.user.create({ data });
+    },
+    update(
+        userId: bigint,
+        data: { nickname?: string; password?: string; deletedAt?: Date | null; googleSub?: string },
+    ) {
         return prisma.user.update({ where: { userId }, data });
     },
 };
