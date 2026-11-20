@@ -40,6 +40,16 @@ export type TokenResponse = {
     refresh_token: string;
 };
 
+// ChatGPT가 주는 콜백 URL 형식. 등록할 때마다 끝부분(callback_id)이 달라서 형식으로 허용한다
+//  - https://chatgpt.com/connector/oauth/{callback_id}
+//  - https://chatgpt.com/connector_platform_oauth_redirect (예전·고정 주소)
+// 다른 사이트로는 절대 돌려보내지 않는다 (code가 엉뚱한 곳으로 새지 않게)
+const CHATGPT_REDIRECT =
+    /^https:\/\/chatgpt\.com\/(connector\/oauth\/[A-Za-z0-9_-]{1,200}|connector_platform_oauth_redirect)$/;
+
+export const isAllowedRedirectUri = (uri: string) =>
+    CHATGPT_REDIRECT.test(uri) || mcpConfig.extraRedirectUris.includes(uri);
+
 const str = (value: unknown) => (typeof value === "string" ? value : "");
 
 // 인가 서버 메타데이터 (RFC 8414). ChatGPT가 등록할 때 읽어서 로그인·토큰 주소를 알아낸다
@@ -66,7 +76,7 @@ export const oauthService = {
         if (!clientId || !safeEqual(clientId, mcpConfig.clientId)) {
             throw new OAuthError("invalid_client", "등록되지 않은 클라이언트입니다.");
         }
-        if (redirectUri !== mcpConfig.redirectUri) {
+        if (!isAllowedRedirectUri(redirectUri)) {
             throw new OAuthError("invalid_request", "허용되지 않은 redirect_uri입니다.");
         }
         if (str(params.response_type) !== "code") {
