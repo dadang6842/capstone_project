@@ -45,3 +45,29 @@ services:
             options:
                 max-size: "10m"
                 max-file: "3"
+
+    # ChatGPT 커넥터용 MCP 서버 (collector/mcp_server.py)
+    # 백엔드와 같은 이미지를 쓰고 실행 명령만 다르다 (Python·Playwright·Chromium·수집 모듈이 이미 들어 있음)
+    mcp:
+        image: ${IMAGE}
+        container_name: capstone-mcp
+        restart: always
+        env_file: .env # MCP_JWT_SECRET, MCP_PUBLIC_URL을 같이 쓴다
+        environment:
+            # 같은 compose 네트워크 안에서 백엔드 컨테이너를 서비스 이름(app)으로 부른다
+            BACKEND_INTERNAL_URL: http://app:3000
+        init: true
+        shm_size: "512m"
+        working_dir: /app/collector
+        command: ["python3", "mcp_server.py"]
+        # Nginx가 /mcp, /.well-known/oauth-protected-resource를 localhost:8000으로 넘겨 줌
+        # (AI 서버도 컨테이너 안에서는 8000번이지만 밖으로 열지 않아서 겹치지 않는다)
+        ports:
+            - "127.0.0.1:8000:8000"
+        depends_on:
+            - app
+        logging:
+            driver: json-file
+            options:
+                max-size: "10m"
+                max-file: "3"
