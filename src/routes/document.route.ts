@@ -35,7 +35,7 @@ registry.registerPath({
         "프론트는 응답의 generationId로 생성 요청 상태 조회(GEN-01)를 폴링한다. 실패하면 GEN-02로 다시 시도한다. " +
         "다른 공간(다른 회원·다른 팀)·삭제한·없는 대화가 섞이면 404(details.conversationIds), 수집이 끝나지 않은 대화가 섞이면 409 CONVERSATION_NOT_COLLECTED, " +
         "생성·AI 보완이 진행 중인 대화가 섞이면 409 CONVERSATION_IN_USE(details.generationIds·documentIds), " +
-        "고른 대화의 발화 글자 수 합계가 상한(기본 100,000자)을 넘으면 400 INPUT_TOO_LARGE(details.totalChars·maxChars). " +
+        "고른 대화의 발화 글자 수 합계가 상한(기본 300,000자)을 넘으면 400 INPUT_TOO_LARGE(details.totalChars·maxChars). " +
         "팀 화면(A04)에서는 body에 workspaceId를 넣고 그 팀의 대화만 고를 수 있다. 요청한 회원이 만들어지는 문서들의 최초 생성 요청자가 된다.",
     security: bearerAuth,
     request: { body: { required: true, content: { "application/json": { schema: createDocumentBodySchema } } } },
@@ -88,7 +88,7 @@ registry.registerPath({
     summary: "미채택 문서 목록 (DRAFT-08)",
     description:
         "초안 검토 화면의 '초안 문서 선택'에 쓰는 목록. 검토할 초안이 있는(DRAFT_GENERATED) 내 문서를 원문 대화의 삭제 여부와 관계없이 " +
-        "최근 생성순으로 준다(삭제한 문서 제외). title·summary는 생성이 끝난 최신 회차 것이고, generationId가 같은 문서는 같은 입력에서 나온 초안이다. " +
+        "최근 생성순으로 준다(삭제한 문서 제외). title·summary·charCount(본문 글자수)는 생성이 끝난 최신 회차 것이고, generationId가 같은 문서는 같은 입력에서 나온 초안이다. " +
         "아직 문서가 없는 생성 요청(생성 중, 최근 7일 안의 실패·남길 내용 없음)은 generations에 따로 준다. " +
         "어떤 회차를 보여 줄지·보완 중인 회차는 문서를 고른 뒤 DRAFT-06으로 조회한다. " +
         "workspaceId를 넣으면 그 팀의 미채택 문서(팀 화면 A05, 생성 요청자 표시), 생략하면 내 개인 문서만.",

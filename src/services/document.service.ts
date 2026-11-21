@@ -13,6 +13,7 @@ import { ensureNotInUse, sendGenerationRequest, toAnalysisInput, toGenerationCar
 import { touchSearchIndex } from "./searchIndex.js";
 import { touchRelationIndex } from "./relationIndex.js";
 import { AppError } from "../utils/appError.js";
+import { countChars } from "../utils/charCount.js";
 import { toPageInfo, toUserRef } from "../schemas/common.schema.js";
 import type {
     CreateDocumentBody,
@@ -280,6 +281,7 @@ export const documentService = {
 
     // 검토할 초안이 있는 문서 목록. 원문 대화의 삭제 여부와 관계없이 보여 준다(삭제한 문서만 뺌)
     // 2026-11-15: 같은 입력에서 나온 문서끼리 묶을 수 있게 generationId를, 목록에 요약을 보여 줄 수 있게 summary를 준다.
+    // 2026-11-21: 목록에 분량을 보여 줄 수 있게 같은 회차의 본문 글자수(charCount)를 준다
     // 아직 문서가 없는 생성 요청(생성 중, 최근 7일 안의 실패·문서 없음)은 generations에 카드로 준다
     async listPending(userId: number, { workspaceId }: ListPendingDocumentsQuery): Promise<PendingDocumentsResponse> {
         const space = await resolveSpace(userId, workspaceId);
@@ -295,6 +297,7 @@ export const documentService = {
                 generationId: generationId === null ? null : Number(generationId),
                 title: latest.title,
                 summary: latest.summary,
+                charCount: countChars(latest.content) ?? 0,
                 requester: toUserRef(user),
                 createdAt,
             })),
