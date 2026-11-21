@@ -114,6 +114,14 @@ export const pendingDocumentsResponseSchema = z
                             example: "Prisma 스키마로 ERD를 옮기며 정한 이름 규칙",
                             description: "생성이 끝난 최신 회차의 요약 (title과 같은 회차)",
                         }),
+                    charCount: z
+                        .number()
+                        .int()
+                        .meta({
+                            example: 2148,
+                            description:
+                                "생성이 끝난 최신 회차(title과 같은 회차)의 본문 글자수. 공백·줄바꿈·Markdown 기호 포함, 이모지도 1자. 직접 수정했다면 수정본 기준",
+                        }),
                     requester: userRefSchema.meta({ description: "생성 요청자 (최초 생성을 요청한 회원)" }),
                     createdAt: z.date(),
                 }),

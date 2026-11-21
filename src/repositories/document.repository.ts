@@ -21,7 +21,7 @@ export const documentRepository = {
         });
     },
 
-    // 이 공간에서 검토할 초안이 있는(DRAFT_GENERATED) 문서를 최근 생성순으로, 생성이 끝난 최신 회차의 제목·요약과 생성 요청 아이디와 함께
+    // 이 공간에서 검토할 초안이 있는(DRAFT_GENERATED) 문서를 최근 생성순으로, 생성이 끝난 최신 회차의 제목·요약·본문(글자수 계산용)과 생성 요청 아이디와 함께
     // (AI 보완 중인 회차는 아직 제목이 없어서 뺀다)
     findPendingBySpace(space: SpaceFilter) {
         return prisma.document.findMany({
@@ -36,7 +36,7 @@ export const documentRepository = {
                     where: { status: "GENERATED" },
                     orderBy: { draftId: "desc" },
                     take: 1,
-                    select: { title: true, summary: true },
+                    select: { title: true, summary: true, content: true },
                 },
             },
         });

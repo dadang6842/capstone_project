@@ -13,6 +13,7 @@ import {
     type AnalysisConversationV2,
 } from "../utils/aiServer.js";
 import { AppError } from "../utils/appError.js";
+import { countChars } from "../utils/charCount.js";
 import type { ErrorCode } from "../utils/errors.js";
 import { logger } from "../utils/logger.js";
 import type {
@@ -253,6 +254,7 @@ export const draftService = {
             category: draft.category,
             keywords: toKeywords(draft.keywords),
             content: draft.content,
+            charCount: countChars(draft.content),
             feedbacks: draft.feedbacks.map(({ reason }) => reason),
             createdAt: draft.createdAt,
             documentStatus: document.status,

@@ -85,6 +85,15 @@ export const draftDetailSchema = z
         category: z.enum(["IDEA_NOTE", "CONCEPT_NOTE", "LIST", "MANUAL"]).nullable().meta({ description: "지식 유형" }),
         keywords: z.array(z.string()).meta({ example: ["Prisma", "MySQL", "ERD"] }),
         content: z.string().nullable().meta({ description: "본문 (Markdown)" }),
+        charCount: z
+            .number()
+            .int()
+            .nullable()
+            .meta({
+                example: 2148,
+                description:
+                    "본문 글자수. 공백·줄바꿈·Markdown 기호 포함, 이모지도 1자. 본문이 없으면(생성 중·실패) null",
+            }),
         feedbacks: z
             .array(z.string())
             .meta({ description: "이 회차를 만들 때 요청한 보완 항목 코드 (1회차는 빈 배열)" }),

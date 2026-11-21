@@ -20,8 +20,8 @@ const envSchema = z.object({
     // AI 서버가 GPT로 초안을 만들어 응답할 때까지 기다리는 최대 시간 (기본 5분)
     AI_TIMEOUT_MS: z.coerce.number().int().positive().default(300_000),
     // 문서 생성 요청(DRAFT-01) 한 번에 보낼 수 있는 발화 글자 수 합계. AI 서버의 출력 토큰 상한(요청 전체 16,000)을 넘지 않게 막는다
-    // 기본 100,000자. AI 담당자와 시험하면서 조정
-    AI_MAX_INPUT_CHARS: z.coerce.number().int().positive().default(100_000),
+    // 기본 300,000자 (2026-11-21 다현 결정으로 100,000자에서 늘림). AI 담당자와 시험하면서 조정
+    AI_MAX_INPUT_CHARS: z.coerce.number().int().positive().default(300_000),
     // 지식 문서 AI 검색 (2026-11-17). AI 서버 ai.env의 AI_ENABLE_SEARCH=true와 같이 켠다. 꺼져 있으면 검색 API는 503, 색인 동기화도 안 보낸다
     AI_SEARCH_ENABLED: z.stringbool().default(false),
     // AI 검색 요청 하나를 기다리는 최대 시간. AI 서버가 모델 호출에 280초 예산을 쓰므로 기본 5분 (Nginx proxy_read_timeout도 이보다 길게)
